@@ -297,6 +297,8 @@ func (app *Application) featureCommands() []tool.Application {
 		newRemote(app, ""),
 		newRemote(app, "inspect"),
 		&links{app: app},
+		&lspbrokerd{app: app},
+		&lspcli{app: app},
 		&prepareRename{app: app},
 		&references{app: app},
 		&rename{app: app},
