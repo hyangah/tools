@@ -29,6 +29,7 @@ import (
 type Broker struct {
 	goplsPath    string
 	goplsVersion string
+	newSession   SessionFactory
 	startTime    time.Time
 
 	// mu protects sessions and stopped.
@@ -40,13 +41,22 @@ type Broker struct {
 	cancel context.CancelFunc
 }
 
-// NewBroker returns a new [Broker] with the given identity strings.
+// NewBroker returns a new [Broker] with the given identity strings and
+// session factory.
+//
 // goplsPath should be os.Executable(); goplsVersion is the gopls
-// version string (may be empty).
-func NewBroker(goplsPath, goplsVersion string) *Broker {
+// version string (may be empty). factory is called to create a new
+// [Session] whenever the broker opens a new workspace root. Pass
+// [NewStubSessionFunc] for testing; pass the goadapter factory in
+// production.
+func NewBroker(goplsPath, goplsVersion string, factory SessionFactory) *Broker {
+	if factory == nil {
+		factory = NewStubSessionFunc
+	}
 	return &Broker{
 		goplsPath:    goplsPath,
 		goplsVersion: goplsVersion,
+		newSession:   factory,
 		sessions:     make(map[string]Session),
 	}
 }
@@ -102,7 +112,15 @@ func (b *Broker) Serve(ctx context.Context, l net.Listener) error {
 	b.mu.Unlock()
 	defer cancel()
 
-	server := jsonrpc2.HandlerServer(b.newConnHandler())
+	// Use a per-connection server so each connection gets its own fresh
+	// handler with its own handshaked state. A shared handler would
+	// cause the second connection to skip the handshake check because
+	// the first connection set handshaked=true.
+	server := jsonrpc2.ServerFunc(func(ctx context.Context, conn jsonrpc2.Conn) error {
+		conn.Go(ctx, b.newConnHandler())
+		<-conn.Done()
+		return conn.Err()
+	})
 	return jsonrpc2.Serve(ctx, l, server, 0)
 }
 
@@ -214,7 +232,7 @@ func (b *Broker) sessionForFile(ctx context.Context, file string) (Session, erro
 	if s, ok := b.sessions[root]; ok {
 		return s, nil
 	}
-	s := newSession(root)
+	s := b.newSession(root)
 	b.sessions[root] = s
 	event.Log(ctx, fmt.Sprintf("broker: new session for root %s", root))
 	return s, nil

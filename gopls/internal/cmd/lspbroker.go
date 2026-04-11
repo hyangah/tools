@@ -41,8 +41,19 @@ func (c *lspcli) Run(ctx context.Context, args ...string) error {
 
 // lspbrokerd implements the `gopls lspbrokerd` subcommand — the
 // long-lived broker daemon process.
+//
+// Flags are declared as exported struct fields so that gopls's tool
+// framework registers them in its FlagSet before calling Run.
 type lspbrokerd struct {
 	app *Application
+
+	// Detach causes the daemon to spawn a background process and exit.
+	// Used by `gopls lspcli` when auto-spawning the daemon.
+	Detach bool `flag:"detach" help:"run daemon in background and exit"`
+
+	// CacheDir overrides the default cache directory. Defaults to
+	// $XDG_CACHE_HOME/lsp-broker/<buildid>/ when unset.
+	CacheDir string `flag:"cache-dir" help:"override cache directory (default: auto from build-id)"`
 }
 
 func (c *lspbrokerd) Name() string      { return "lspbrokerd" }
@@ -56,5 +67,5 @@ func (c *lspbrokerd) DetailedHelp(f *flag.FlagSet) {
 }
 
 func (c *lspbrokerd) Run(ctx context.Context, args ...string) error {
-	return brokercmd.RunLSPBrokerd(ctx, args...)
+	return brokercmd.RunLSPBrokerd(ctx, c.Detach, c.CacheDir)
 }

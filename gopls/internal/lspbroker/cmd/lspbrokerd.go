@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -14,37 +13,28 @@ import (
 	"time"
 
 	"golang.org/x/tools/gopls/internal/lspbroker"
+	"golang.org/x/tools/gopls/internal/lspbroker/goadapter"
 	goplsversion "golang.org/x/tools/gopls/internal/version"
 )
 
 // RunLSPBrokerd is the entry point for `gopls lspbrokerd`. It runs
 // the long-lived broker daemon.
 //
-// It accepts the following flags:
+// Flags are parsed by gopls's tool framework before this function is
+// called and passed in as explicit parameters:
 //
-//	--detach        Fork a background process and exit immediately.
-//	                The child runs without --detach as the daemon.
-//	--cache-dir D   Override the cache directory (default: lspbroker.CacheRoot()).
-func RunLSPBrokerd(ctx context.Context, args ...string) error {
-	fs := flag.NewFlagSet("lspbrokerd", flag.ContinueOnError)
-	var (
-		detach   = fs.Bool("detach", false, "run daemon in background and exit")
-		cacheDir = fs.String("cache-dir", "", "override cache directory (default: auto)")
-	)
-	if err := fs.Parse(args); err != nil {
-		return err
+//   - detach: fork a background process and exit immediately.
+//   - cacheDir: override the cache directory (empty = use CacheRoot()).
+func RunLSPBrokerd(ctx context.Context, detach bool, cacheDir string) error {
+	if cacheDir == "" {
+		cacheDir = lspbroker.CacheRoot()
 	}
 
-	dir := *cacheDir
-	if dir == "" {
-		dir = lspbroker.CacheRoot()
+	if detach {
+		return detachDaemon(cacheDir)
 	}
 
-	if *detach {
-		return detachDaemon(dir)
-	}
-
-	return runDaemon(ctx, dir)
+	return runDaemon(ctx, cacheDir)
 }
 
 // runDaemon starts the broker daemon in the foreground: creates the
@@ -70,8 +60,15 @@ func runDaemon(ctx context.Context, cacheDir string) error {
 	defer l.Close()
 
 	self, _ := os.Executable()
-	b := lspbroker.NewBroker(self, goplsversion.Version())
-	fmt.Fprintf(os.Stderr, "lspbrokerd: listening on %s\n", filepath.Join(cacheDir, "broker.sock"))
+	// Use the Go adapter as the session factory so that lsp.definition
+	// (and future lsp.* methods) route to a real gopls subprocess for
+	// Go projects. Phase 1 hardcodes Go-only; WS-E will add language
+	// detection and .lsp.json config in Phase 3.
+	factory := lspbroker.SessionFactory(func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	})
+	b := lspbroker.NewBroker(self, goplsversion.Version(), factory)
+	fmt.Fprintf(os.Stderr, "lspbrokerd: listening on %s\n", l.Addr())
 	return b.Serve(ctx, l)
 }
 
@@ -90,13 +87,13 @@ $XDG_CACHE_HOME/lsp-broker/<buildid>/, and idles itself out after a
 configurable timeout.
 
 Flags:
-  --detach        run daemon in background and exit (used by lspcli auto-spawn)
-  --cache-dir D   override the cache directory (default: auto from build-id)
+  -detach        run daemon in background and exit (used by lspcli auto-spawn)
+  -cache-dir D   override the cache directory (default: auto from build-id)
 `)
 }
 
 // detachDaemon re-executes the current binary as a background daemon
-// without the --detach flag, waits up to 2 s for broker.sock to
+// without the -detach flag, waits up to 2 s for broker.sock to
 // appear, then returns nil so the parent (the original lspcli call)
 // can proceed.
 //
@@ -104,10 +101,10 @@ Flags:
 func detachDaemon(cacheDir string) error {
 	self, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("lspbrokerd --detach: resolve executable: %w", err)
+		return fmt.Errorf("lspbrokerd -detach: resolve executable: %w", err)
 	}
 	if err := spawnDetached(self, cacheDir); err != nil {
-		return fmt.Errorf("lspbrokerd --detach: spawn: %w", err)
+		return fmt.Errorf("lspbrokerd -detach: spawn: %w", err)
 	}
 	// Wait up to 2 s for the socket to appear.
 	sockPath := filepath.Join(cacheDir, "broker.sock")

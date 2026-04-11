@@ -27,7 +27,7 @@ func startTestBroker(t *testing.T) (conn jsonrpc2.Conn, cacheDir string) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	b := NewBroker("/test/gopls", "test")
+	b := NewBroker("/test/gopls", "test", nil) // nil → stub sessions
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()

@@ -21,6 +21,20 @@ type SessionInfo struct {
 	PID int
 }
 
+// SessionFactory is a function that creates a new [Session] for the
+// given workspace root. Brokers accept a SessionFactory at construction
+// time so that the broker core package remains independent of any
+// particular LSP client implementation (which would create an import
+// cycle: goadapter → lspbroker → goadapter).
+//
+// Pass [NewGoSessionFunc] from the goadapter package in production; use
+// [NewStubSessionFunc] in tests.
+type SessionFactory func(root string) Session
+
+// NewStubSessionFunc is a [SessionFactory] that creates a [stubSession].
+// Use in tests or as a placeholder before the real adapter is wired in.
+func NewStubSessionFunc(root string) Session { return newSession(root) }
+
 // Session is a per-project state container. One Session exists for
 // each workspace root that the broker has opened. WS-C (lspclient)
 // fills in the full body in Phase 1; this Phase 0/1 interface is the
