@@ -6,22 +6,73 @@ package cmd
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"time"
+
+	"golang.org/x/tools/gopls/internal/lspbroker"
+	goplsversion "golang.org/x/tools/gopls/internal/version"
 )
 
 // RunLSPBrokerd is the entry point for `gopls lspbrokerd`. It runs
 // the long-lived broker daemon.
 //
-// Phase 0: the daemon is not yet implemented. This entry point
-// prints a stub message and returns nil so that callers verifying
-// the self-spawn flow (os.Executable() + "lspbrokerd --detach") see
-// an exit-code-0 process and can assert that re-invocation of the
-// gopls binary works end-to-end. WS-A fills in the real body in
-// Phase 1.
+// It accepts the following flags:
+//
+//	--detach        Fork a background process and exit immediately.
+//	                The child runs without --detach as the daemon.
+//	--cache-dir D   Override the cache directory (default: lspbroker.CacheRoot()).
 func RunLSPBrokerd(ctx context.Context, args ...string) error {
-	fmt.Println("lspbrokerd: Phase 0 stub — daemon not yet implemented")
-	return nil
+	fs := flag.NewFlagSet("lspbrokerd", flag.ContinueOnError)
+	var (
+		detach   = fs.Bool("detach", false, "run daemon in background and exit")
+		cacheDir = fs.String("cache-dir", "", "override cache directory (default: auto)")
+	)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	dir := *cacheDir
+	if dir == "" {
+		dir = lspbroker.CacheRoot()
+	}
+
+	if *detach {
+		return detachDaemon(dir)
+	}
+
+	return runDaemon(ctx, dir)
+}
+
+// runDaemon starts the broker daemon in the foreground: creates the
+// cache directory, acquires the pidfile, opens the socket listener,
+// and calls Broker.Serve. It returns when the context is cancelled or
+// the listener is closed.
+func runDaemon(ctx context.Context, cacheDir string) error {
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		return fmt.Errorf("lspbrokerd: create cache dir %s: %w", cacheDir, err)
+	}
+
+	pidPath := filepath.Join(cacheDir, "broker.pid")
+	releasePID, err := lspbroker.AcquirePIDFile(pidPath)
+	if err != nil {
+		return fmt.Errorf("lspbrokerd: %w", err)
+	}
+	defer releasePID()
+
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		return fmt.Errorf("lspbrokerd: %w", err)
+	}
+	defer l.Close()
+
+	self, _ := os.Executable()
+	b := lspbroker.NewBroker(self, goplsversion.Version())
+	fmt.Fprintf(os.Stderr, "lspbrokerd: listening on %s\n", filepath.Join(cacheDir, "broker.sock"))
+	return b.Serve(ctx, l)
 }
 
 // PrintLSPBrokerdHelp writes the lspbrokerd long-form help to w. It
@@ -38,9 +89,36 @@ AI agents, listens on a per-user unix domain socket under
 $XDG_CACHE_HOME/lsp-broker/<buildid>/, and idles itself out after a
 configurable timeout.
 
-Phase 0: the daemon is not yet implemented. "gopls lspbrokerd
---help" exists so that the subcommand is wired into the gopls
-binary and so that self-spawn verification tests can exercise
-os.Executable() + "lspbrokerd --detach" end-to-end.
+Flags:
+  --detach        run daemon in background and exit (used by lspcli auto-spawn)
+  --cache-dir D   override the cache directory (default: auto from build-id)
 `)
+}
+
+// detachDaemon re-executes the current binary as a background daemon
+// without the --detach flag, waits up to 2 s for broker.sock to
+// appear, then returns nil so the parent (the original lspcli call)
+// can proceed.
+//
+// The detach mechanism is OS-specific; see daemon_posix.go.
+func detachDaemon(cacheDir string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("lspbrokerd --detach: resolve executable: %w", err)
+	}
+	if err := spawnDetached(self, cacheDir); err != nil {
+		return fmt.Errorf("lspbrokerd --detach: spawn: %w", err)
+	}
+	// Wait up to 2 s for the socket to appear.
+	sockPath := filepath.Join(cacheDir, "broker.sock")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sockPath); err == nil {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Socket never appeared; return nil anyway — the CLI will detect
+	// the missing socket on its own and report an error there.
+	return nil
 }
