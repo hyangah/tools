@@ -39,6 +39,8 @@ Features
   remote            interact with the gopls daemon
   inspect           interact with the gopls daemon (deprecated: use 'remote')
   links             list links in a file
+  lspbrokerd        LSP broker daemon (long-lived)
+  lspcli            LSP broker CLI (agent-facing)
   prepare_rename    test validity of a rename operation at location
   references        display selected identifier's references
   rename            rename selected identifier

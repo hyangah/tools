@@ -1,0 +1,18 @@
+LSP broker CLI (agent-facing)
+
+Usage:
+  gopls [flags] lspcli <subcommand> [arg]...
+
+lspcli is the agent-facing CLI for the LSP broker. Agents invoke
+subcommands like "gopls lspcli def FILE LINE COL" via their shell
+tool and receive pre-formatted results.
+
+The CLI is a thin, stateless wrapper around the broker daemon: on
+first invocation it auto-spawns "gopls lspbrokerd --detach" and
+communicates with it over a unix domain socket.
+
+Phase 0: no subcommands are registered yet. "gopls lspcli --help"
+exists so that agents, tests, and CI can verify the subcommand is
+wired into the gopls binary. Real subcommands (def, refs, hover,
+symbols, daemon, ...) land in Phase 1 and later as the relevant
+workstreams complete.
