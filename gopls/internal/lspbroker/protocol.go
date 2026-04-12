@@ -183,6 +183,7 @@ type DocumentSymbolParams struct {
 type WorkspaceSymbolParams struct {
 	Version int    `json:"version"`
 	Query   string `json:"query"`
+	File    string `json:"file,omitempty"` // absolute path used for session routing
 }
 
 // CallHierarchyItemParams wraps a call hierarchy item for incoming/outgoing calls.

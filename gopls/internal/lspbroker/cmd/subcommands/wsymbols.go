@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"golang.org/x/tools/gopls/internal/lspbroker/format"
@@ -54,7 +55,12 @@ func RunWsymbols(ctx context.Context, args []string, flags DefFlags, cacheDir, s
 	}
 	defer bc.Close()
 
-	raw, err := bc.WorkspaceSymbol(ctx, query)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return 4, fmt.Errorf("get working directory: %w", err)
+	}
+
+	raw, err := bc.WorkspaceSymbol(ctx, query, cwd)
 	if err != nil {
 		code := classifyError(err)
 		return code, err

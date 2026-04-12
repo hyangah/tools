@@ -114,10 +114,12 @@ func (bc *BrokerConn) DocumentSymbol(ctx context.Context, file string) (json.Raw
 }
 
 // WorkspaceSymbol sends an lsp.workspaceSymbol request.
-func (bc *BrokerConn) WorkspaceSymbol(ctx context.Context, query string) (json.RawMessage, error) {
+// file is an absolute path used by the broker for session routing (e.g. cwd).
+func (bc *BrokerConn) WorkspaceSymbol(ctx context.Context, query, file string) (json.RawMessage, error) {
 	params := lspbroker.WorkspaceSymbolParams{
 		Version: lspbroker.ProtocolVersion,
 		Query:   query,
+		File:    file,
 	}
 	var result json.RawMessage
 	if _, err := bc.conn.Call(ctx, lspbroker.WorkspaceSymbolMethod, params, &result); err != nil {
