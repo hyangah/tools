@@ -360,7 +360,9 @@ func (c *Client) watchExit() {
 		err := c.cmd.Wait()
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if c.state != StateStopping && c.state != StateStopped {
+		if c.state == StateStopping {
+			c.state = StateStopped
+		} else if c.state != StateStopped {
 			c.state = StateErrored
 			if err != nil {
 				c.err = fmt.Errorf("lsp server exited unexpectedly: %w", err)
@@ -376,7 +378,9 @@ func (c *Client) watchExit() {
 	<-c.conn.Done()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.state != StateStopping && c.state != StateStopped {
+	if c.state == StateStopping {
+		c.state = StateStopped
+	} else if c.state != StateStopped {
 		c.state = StateErrored
 		if err := c.conn.Err(); err != nil {
 			c.err = fmt.Errorf("lsp connection closed: %w", err)

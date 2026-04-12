@@ -325,7 +325,7 @@ func (b *Broker) handlePositionalOp(ctx context.Context, reply jsonrpc2.Replier,
 	// an empty response.
 	if req.Method() == DefinitionMethod && (len(result) == 0 || string(result) == "null") {
 		selfLoc := []Location{{
-			URI: "file://" + params.File,
+			URI: string(protocol.URIFromPath(params.File)),
 			Range: Range{
 				Start: Position{Line: params.Line - 1, Character: *params.Character - 1},
 				End:   Position{Line: params.Line - 1, Character: *params.Character - 1},
@@ -361,7 +361,7 @@ func (b *Broker) handlePassthrough(ctx context.Context, reply jsonrpc2.Replier, 
 			} `json:"item"`
 		}
 		if err := json.Unmarshal(req.Params(), &itemParams); err == nil && itemParams.Item.URI != "" {
-			file = itemParams.Item.URI
+			file = protocol.DocumentURI(itemParams.Item.URI).Path()
 		}
 	}
 
@@ -452,7 +452,7 @@ func (b *Broker) handleRename(ctx context.Context, reply jsonrpc2.Replier, req j
 		return reply(ctx, nil, fmt.Errorf("broker: decode WorkspaceEdit: %w", err))
 	}
 
-	result, err := ApplyWorkspaceEdit(&we, params.DryRun)
+	result, err := ApplyWorkspaceEdit(&we, sess.Root(), params.DryRun)
 	if err != nil {
 		return reply(ctx, nil, fmt.Errorf("broker: apply edits: %w", err))
 	}
@@ -662,18 +662,25 @@ func (b *Broker) sessionForFile(ctx context.Context, file string) (Session, erro
 		return nil, fmt.Errorf("broker: load config for %s: %w", root, err)
 	}
 
-	// Trust check: if .lsp.json exists but the root is not trusted,
-	// block non-Go requests. Go auto-config is safe (no user-controlled
-	// commands) so it skips the trust check.
-	if cfg != nil && b.TrustStore != nil && !b.TrustStore.IsTrusted(root) {
-		// Go auto-config can still proceed for Go extensions.
-		if !isGoExt(ext) {
-			return nil, fmt.Errorf("%w: project root %s has .lsp.json but is not trusted; run: gopls lspcli trust add %s",
-				ErrUntrustedRoot, root, root)
+	// Trust check: if .lsp.json exists, a TrustStore must be configured
+	// and the root must be trusted. Go auto-config is safe (no
+	// user-controlled commands) so it skips the trust check.
+	if cfg != nil {
+		if b.TrustStore == nil {
+			// Fail-closed: refuse to load .lsp.json without a trust store.
+			return nil, fmt.Errorf("%w: project root %s has .lsp.json but no trust store is configured",
+				ErrUntrustedRoot, root)
 		}
-		// For Go extensions, fall through to Go auto-config below
-		// (which doesn't use .lsp.json).
-		cfg = nil
+		if !b.TrustStore.IsTrusted(root) {
+			// Go auto-config can still proceed for Go extensions.
+			if !isGoExt(ext) {
+				return nil, fmt.Errorf("%w: project root %s has .lsp.json but is not trusted; run: gopls lspcli trust add %s",
+					ErrUntrustedRoot, root, root)
+			}
+			// For Go extensions, fall through to Go auto-config below
+			// (which doesn't use .lsp.json).
+			cfg = nil
+		}
 	}
 
 	// Go auto-config: .go/.mod/.sum files in a Go project.
@@ -717,6 +724,11 @@ func (b *Broker) sessionForFile(ctx context.Context, file string) (Session, erro
 // evicted before the config is reloaded so that subsequent requests get
 // a fresh session configured from the new file.
 //
+// The entire check-evict-reload-store sequence runs under b.mu to
+// prevent two goroutines from racing on the same root (which would
+// cause double-Close of sessions). Config files are small, so the
+// lock is held only briefly.
+//
 // Callers must NOT hold b.mu.
 func (b *Broker) loadConfigCached(ctx context.Context, root string) (*Config, error) {
 	cfgPath := filepath.Join(root, ".lsp.json")
@@ -728,47 +740,43 @@ func (b *Broker) loadConfigCached(ctx context.Context, root string) (*Config, er
 	}
 
 	b.mu.Lock()
-	entry, cached := b.configCache[root]
-	b.mu.Unlock()
 
 	// Fast path: config is cached and the file hasn't changed.
-	if cached && entry.mtime.Equal(mtime) {
+	if entry, cached := b.configCache[root]; cached && entry.mtime.Equal(mtime) {
+		b.mu.Unlock()
 		return entry.cfg, nil
 	}
 
 	// Slow path: first load or mtime changed — evict stale sessions.
-	if cached {
-		b.mu.Lock()
-		var toClose []Session
-		for key, sess := range b.sessions {
-			if key.root == root {
-				toClose = append(toClose, sess)
-				delete(b.sessions, key)
-			}
-		}
-		b.mu.Unlock()
-		// Close sessions without holding the lock; in-flight requests on
-		// the old sessions complete normally (they hold their own reference).
-		for _, sess := range toClose {
-			if err := sess.Close(); err != nil {
-				event.Error(ctx, "broker: evict session on config reload", err)
-			}
+	var toClose []Session
+	for key, sess := range b.sessions {
+		if key.root == root {
+			toClose = append(toClose, sess)
+			delete(b.sessions, key)
 		}
 	}
 
-	// Reload (or clear) the config.
+	// Reload (or clear) the config while still under the lock.
 	var cfg *Config
 	if statErr == nil {
 		var err error
 		cfg, err = LoadConfig(root)
 		if err != nil {
+			b.mu.Unlock()
 			return nil, err
 		}
 	}
 
-	b.mu.Lock()
 	b.configCache[root] = configEntry{cfg: cfg, mtime: mtime}
 	b.mu.Unlock()
+
+	// Close evicted sessions outside the lock; in-flight requests on
+	// the old sessions complete normally (they hold their own reference).
+	for _, sess := range toClose {
+		if err := sess.Close(); err != nil {
+			event.Error(ctx, "broker: evict session on config reload", err)
+		}
+	}
 
 	return cfg, nil
 }

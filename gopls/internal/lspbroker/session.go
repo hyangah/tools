@@ -6,6 +6,8 @@ package lspbroker
 
 import (
 	"context"
+
+	"golang.org/x/tools/internal/jsonrpc2"
 )
 
 // SessionInfo carries the observable state of an active broker session,
@@ -15,23 +17,9 @@ type SessionInfo struct {
 	// Root is the absolute path to the project root directory that
 	// this session was opened for.
 	Root string
-
-	// PID is the operating-system process ID of the session's LSP
-	// server subprocess, or 0 if no server has been started yet.
-	PID int
 }
 
-// SessionFactory is a function that creates a new [Session] for the
-// given workspace root. Brokers accept a SessionFactory at construction
-// time so that the broker core package remains independent of any
-// particular LSP client implementation (which would create an import
-// cycle: goadapter → lspbroker → goadapter).
-//
-// Pass [NewGoSessionFunc] from the goadapter package in production; use
-// [NewStubSessionFunc] in tests.
-type SessionFactory func(root string) Session
-
-// NewStubSessionFunc is a [SessionFactory] that creates a [stubSession].
+// NewStubSessionFunc creates a [stubSession] for the given root.
 // Use in tests or as a placeholder before the real adapter is wired in.
 func NewStubSessionFunc(root string) Session { return newSession(root) }
 
@@ -85,16 +73,7 @@ func (s *stubSession) Sync(_ context.Context, _ string) error { return nil }
 func (s *stubSession) Close() error { return nil }
 
 // errMethodNotImplemented returns the standard JSON-RPC "method not
-// found" error wrapping the given method name.
+// found" error for the given method name.
 func errMethodNotImplemented(method string) error {
-	return &rpcError{code: -32601, msg: "method not implemented in Phase 1: " + method}
+	return jsonrpc2.NewError(-32601, "method not implemented: "+method)
 }
-
-// rpcError is a minimal JSON-RPC error value used when we cannot
-// import jsonrpc2 without a circular dependency.
-type rpcError struct {
-	code int
-	msg  string
-}
-
-func (e *rpcError) Error() string { return e.msg }

@@ -98,7 +98,7 @@ func (s *GoSession) Close() error {
 	s.mu.Unlock()
 
 	if c != nil {
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5e9) // 5s
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return c.Shutdown(shutCtx)
 	}

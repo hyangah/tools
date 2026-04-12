@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -276,12 +277,7 @@ func ExitCode(err error) int {
 	return 1
 }
 
-// asExitError is a type assertion helper to avoid importing errors.As
-// in packages that only need this one check.
+// asExitError extracts an *exitError from err, unwrapping as needed.
 func asExitError(err error, target **exitError) bool {
-	e, ok := err.(*exitError)
-	if ok {
-		*target = e
-	}
-	return ok
+	return errors.As(err, target)
 }

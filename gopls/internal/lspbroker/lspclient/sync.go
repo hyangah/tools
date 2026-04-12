@@ -249,10 +249,10 @@ func staleByFingerprint(st *openState, fi os.FileInfo) bool {
 func (c *Client) sendDidOpen(ctx context.Context, uri string, languageID string, content []byte) error {
 	// Double-check under per-URI lock.
 	c.syncer.mu.Lock()
-	if c.syncer.files[uri] != nil {
+	if st := c.syncer.files[uri]; st != nil {
 		c.syncer.mu.Unlock()
 		// Race: another goroutine already opened it; fall through to DidChange.
-		return c.sendDidChange(ctx, uri, content, c.syncer.files[uri])
+		return c.sendDidChange(ctx, uri, content, st)
 	}
 	st := &openState{
 		version:  1,

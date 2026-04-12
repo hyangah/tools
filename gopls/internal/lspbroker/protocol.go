@@ -234,14 +234,6 @@ const (
 	// and could not be restarted within the retry limit.
 	ErrCodeServerCrashed = -32002
 
-	// ErrCodeTimeout is returned when the LSP server did not respond
-	// within the per-operation timeout.
-	ErrCodeTimeout = -32003
-
-	// ErrCodeFileNotFound is returned when the requested file does not
-	// exist on disk.
-	ErrCodeFileNotFound = -32004
-
 	// ErrCodeProjectNotFound is returned when the broker cannot find a
 	// project root (e.g. no go.mod or .lsp.json ancestor directory).
 	ErrCodeProjectNotFound = -32005
@@ -253,10 +245,6 @@ const (
 	// ErrCodeUntrustedRoot is returned when the project root is not in
 	// the trust list.
 	ErrCodeUntrustedRoot = -32007
-
-	// ErrCodeSymbolUnsupported is returned when the LSP server does not
-	// support textDocument/documentSymbol (effectively never fires).
-	ErrCodeSymbolUnsupported = -32008
 
 	// ErrCodeAmbiguousSymbol is returned when the symbol name matches
 	// more than one candidate in the file. The error data contains the
@@ -370,14 +358,6 @@ var (
 	// ErrServerCrashed is returned when the LSP server process died and
 	// exhausted all restart attempts.
 	ErrServerCrashed = jsonrpc2.NewError(ErrCodeServerCrashed, "language server crashed")
-
-	// ErrTimeout is returned when the LSP server did not respond in
-	// time.
-	ErrTimeout = jsonrpc2.NewError(ErrCodeTimeout, "language server did not respond in time")
-
-	// ErrFileNotFound is returned when the requested file path does not
-	// exist on disk.
-	ErrFileNotFound = jsonrpc2.NewError(ErrCodeFileNotFound, "file not found")
 
 	// ErrProjectNotFound is returned when no project root can be
 	// determined for the requested file.

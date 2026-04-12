@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"golang.org/x/tools/gopls/internal/protocol"
 )
@@ -16,6 +17,11 @@ import (
 // ApplyWorkspaceEdit applies the edits in we to the files on disk.
 // It returns a [RenameResult] summarising the changes. If dryRun is
 // true the files are not modified and Applied in the result is false.
+//
+// rootDir is the project root directory. All edited file paths must
+// resolve (after symlink evaluation) to paths inside rootDir; if any
+// path escapes the root the entire edit is rejected. This prevents a
+// compromised language server from writing to arbitrary files.
 //
 // The function processes DocumentChanges (modern) if present, falling
 // back to the legacy Changes map. Only TextDocumentEdit entries are
@@ -25,7 +31,7 @@ import (
 //
 // Edits within a single file are applied in reverse position order so
 // that earlier edits do not invalidate the offsets of later ones.
-func ApplyWorkspaceEdit(we *protocol.WorkspaceEdit, dryRun bool) (*RenameResult, error) {
+func ApplyWorkspaceEdit(we *protocol.WorkspaceEdit, rootDir string, dryRun bool) (*RenameResult, error) {
 	if we == nil {
 		return &RenameResult{Applied: !dryRun}, nil
 	}
@@ -70,15 +76,33 @@ func ApplyWorkspaceEdit(we *protocol.WorkspaceEdit, dryRun bool) (*RenameResult,
 	// Sort files by path for deterministic output.
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
 
-	// Pre-flight: verify all files exist before writing any of them.
-	for _, f := range files {
-		if _, err := os.Stat(f.path); err != nil {
-			return nil, fmt.Errorf("editapply: pre-flight stat %s: %w", f.path, err)
+	// Resolve the root directory for containment checks.
+	absRoot, err := filepath.EvalSymlinks(filepath.Clean(rootDir))
+	if err != nil {
+		return nil, fmt.Errorf("editapply: resolve root %s: %w", rootDir, err)
+	}
+	rootPrefix := absRoot + string(filepath.Separator)
+
+	// Pre-flight: verify all files exist and are inside the project root.
+	// Use Lstat to detect symlinks, then EvalSymlinks to get the real path.
+	for i, f := range files {
+		realPath, err := filepath.EvalSymlinks(f.path)
+		if err != nil {
+			return nil, fmt.Errorf("editapply: resolve path %s: %w", f.path, err)
 		}
+		if realPath != absRoot && !strings.HasPrefix(realPath, rootPrefix) {
+			return nil, fmt.Errorf("editapply: path %s resolves to %s which is outside project root %s", f.path, realPath, rootDir)
+		}
+		// Use the resolved path for all subsequent operations.
+		files[i].path = realPath
 	}
 
 	var changes []FileChange
 	for _, f := range files {
+		fi, err := os.Stat(f.path)
+		if err != nil {
+			return nil, fmt.Errorf("editapply: stat %s: %w", f.path, err)
+		}
 		content, err := os.ReadFile(f.path)
 		if err != nil {
 			return nil, fmt.Errorf("editapply: read %s: %w", f.path, err)
@@ -88,7 +112,7 @@ func ApplyWorkspaceEdit(we *protocol.WorkspaceEdit, dryRun bool) (*RenameResult,
 			return nil, fmt.Errorf("editapply: apply edits to %s: %w", f.path, err)
 		}
 		if !dryRun {
-			if err := atomicWriteFile(f.path, updated, 0o644); err != nil {
+			if err := atomicWriteFile(f.path, updated, fi.Mode().Perm()); err != nil {
 				return nil, fmt.Errorf("editapply: write %s: %w", f.path, err)
 			}
 		}

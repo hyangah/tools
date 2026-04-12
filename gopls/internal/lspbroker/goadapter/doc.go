@@ -18,8 +18,5 @@
 // will switch to "-remote=auto" forwarder mode so that the broker
 // shares an existing editor gopls daemon.
 //
-// TODO(WS-C): replace the inline lspClient stub with lspclient.Client
-// once WS-C's lspclient package has a working Definition method.
-//
 // TODO(WS-D Phase 2): add gopls -remote=auto forwarder mode.
 package goadapter

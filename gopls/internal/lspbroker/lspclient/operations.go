@@ -35,33 +35,7 @@ func (c *Client) Definition(ctx context.Context, uri string, line, character uin
 	if _, err := c.conn.Call(ctx, "textDocument/definition", params, &raw); err != nil {
 		return nil, fmt.Errorf("textDocument/definition: %w", err)
 	}
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
-	}
-
-	// The result can be Location | Location[] | LocationLink[] per spec.
-	// Try Location[] first, then a single Location.
-	var locations []protocol.Location
-	if err := json.Unmarshal(raw, &locations); err == nil {
-		return locations, nil
-	}
-	var single protocol.Location
-	if err := json.Unmarshal(raw, &single); err == nil {
-		return []protocol.Location{single}, nil
-	}
-	// LocationLink[] — normalize to Location[].
-	var links []protocol.LocationLink
-	if err := json.Unmarshal(raw, &links); err != nil {
-		return nil, fmt.Errorf("textDocument/definition: cannot decode result: %s", string(raw))
-	}
-	out := make([]protocol.Location, len(links))
-	for i, l := range links {
-		out[i] = protocol.Location{
-			URI:   l.TargetURI,
-			Range: l.TargetSelectionRange,
-		}
-	}
-	return out, nil
+	return decodeLocations(raw, "textDocument/definition")
 }
 
 // DocumentSymbol returns the document symbol tree for the file identified by uri.
@@ -128,9 +102,16 @@ func (c *Client) Hover(ctx context.Context, uri string, line, character uint32) 
 			Position:     protocol.Position{Line: line, Character: character},
 		},
 	}
-	var result protocol.Hover
-	if _, err := c.conn.Call(ctx, "textDocument/hover", params, &result); err != nil {
+	var raw json.RawMessage
+	if _, err := c.conn.Call(ctx, "textDocument/hover", params, &raw); err != nil {
 		return nil, fmt.Errorf("textDocument/hover: %w", err)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var result protocol.Hover
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("textDocument/hover: cannot decode result: %w", err)
 	}
 	return &result, nil
 }

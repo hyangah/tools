@@ -676,6 +676,15 @@ func TestBroker_MultiLanguageRouting(t *testing.T) {
 	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
 	}
+	// Trust the temp project directory so .lsp.json is honoured.
+	{
+		ts, tsErr := lspbroker.LoadTrustStore(filepath.Join(t.TempDir(), "trusted.json"))
+		if tsErr != nil {
+			t.Fatalf("LoadTrustStore: %v", tsErr)
+		}
+		ts.Add(tmpDir)
+		b.TrustStore = ts
+	}
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
 	serveDone := make(chan struct{})
@@ -845,6 +854,15 @@ func TestBroker_GoAutoConfigPriority(t *testing.T) {
 	b := lspbroker.NewBroker(goplsPath, "test")
 	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
+	}
+	// Trust the temp project directory so .lsp.json is honoured.
+	{
+		ts, tsErr := lspbroker.LoadTrustStore(filepath.Join(t.TempDir(), "trusted.json"))
+		if tsErr != nil {
+			t.Fatalf("LoadTrustStore: %v", tsErr)
+		}
+		ts.Add(tmpDir)
+		b.TrustStore = ts
 	}
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())

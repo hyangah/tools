@@ -96,7 +96,7 @@ func (ts *TrustStore) Add(root string) error {
 // It is not an error if root was not in the list.
 func (ts *TrustStore) Remove(root string) error {
 	root = filepath.Clean(root)
-	filtered := ts.paths[:0]
+	filtered := make([]string, 0, len(ts.paths))
 	for _, p := range ts.paths {
 		if p != root {
 			filtered = append(filtered, p)
@@ -115,7 +115,7 @@ func (ts *TrustStore) List() []string {
 
 // save writes the trust store to disk.
 func (ts *TrustStore) save() error {
-	if err := os.MkdirAll(filepath.Dir(ts.path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(ts.path), 0700); err != nil {
 		return err
 	}
 	j := trustStoreJSON{Paths: ts.paths}
@@ -126,5 +126,5 @@ func (ts *TrustStore) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(ts.path, data, 0644)
+	return os.WriteFile(ts.path, data, 0600)
 }

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 )
 
 // resolveFile converts a user-supplied file argument to an absolute path
@@ -28,14 +27,4 @@ func resolveFile(arg string) (string, error) {
 		return "", fmt.Errorf("%s: %w", arg, err)
 	}
 	return abs, nil
-}
-
-// parseInt parses a string as a positive integer. It returns a user-
-// friendly error that includes the field name on failure.
-func parseInt(s, field string) (int, error) {
-	n, err := strconv.Atoi(s)
-	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("%s must be a positive integer, got %q", field, s)
-	}
-	return n, nil
 }

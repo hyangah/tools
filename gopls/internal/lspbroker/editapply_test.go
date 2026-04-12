@@ -99,6 +99,7 @@ func TestApplyTextEditsToContent(t *testing.T) {
 
 func TestApplyWorkspaceEdit_DryRun(t *testing.T) {
 	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
 	file := filepath.Join(dir, "foo.go")
 	original := "package foo\n\nfunc Greeting(name string) string { return name }\n"
 	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
@@ -120,7 +121,7 @@ func TestApplyWorkspaceEdit_DryRun(t *testing.T) {
 		},
 	}
 
-	result, err := ApplyWorkspaceEdit(we, true /* dryRun */)
+	result, err := ApplyWorkspaceEdit(we, dir, true /* dryRun */)
 	if err != nil {
 		t.Fatalf("ApplyWorkspaceEdit dry run: %v", err)
 	}
@@ -139,6 +140,8 @@ func TestApplyWorkspaceEdit_DryRun(t *testing.T) {
 
 func TestApplyWorkspaceEdit_Applied(t *testing.T) {
 	dir := t.TempDir()
+	// Resolve symlinks so comparisons match (macOS /var → /private/var).
+	dir, _ = filepath.EvalSymlinks(dir)
 	file := filepath.Join(dir, "foo.go")
 	original := "package foo\n\nfunc Greeting(name string) string { return name }\n"
 	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
@@ -160,7 +163,7 @@ func TestApplyWorkspaceEdit_Applied(t *testing.T) {
 		},
 	}
 
-	result, err := ApplyWorkspaceEdit(we, false /* dryRun */)
+	result, err := ApplyWorkspaceEdit(we, dir, false /* dryRun */)
 	if err != nil {
 		t.Fatalf("ApplyWorkspaceEdit: %v", err)
 	}
@@ -178,7 +181,7 @@ func TestApplyWorkspaceEdit_Applied(t *testing.T) {
 }
 
 func TestApplyWorkspaceEdit_Nil(t *testing.T) {
-	result, err := ApplyWorkspaceEdit(nil, false)
+	result, err := ApplyWorkspaceEdit(nil, t.TempDir(), false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -6,15 +6,16 @@ package subcommands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/tools/gopls/internal/lspbroker"
 	"golang.org/x/tools/gopls/internal/lspbroker/format"
+	"golang.org/x/tools/internal/jsonrpc2"
 )
 
 // DefFlags holds the parsed flags and positional arguments for the
@@ -232,24 +233,18 @@ func classifyError(err error) int {
 }
 
 // isLSPBrokerError returns true for errors that originate from the
-// broker layer rather than the LSP server layer.
+// broker layer rather than the LSP server layer. Broker errors travel
+// as jsonrpc2 wire errors, so we extract the numeric code.
 func isLSPBrokerError(err error) bool {
-	for _, target := range []error{
-		lspbroker.ErrVersionMismatch,
-		lspbroker.ErrUntrustedRoot,
-		lspbroker.ErrProjectNotFound,
-	} {
-		if target != nil && err.Error() == target.Error() {
-			return true
-		}
+	var we *jsonrpc2.WireError
+	if !errors.As(err, &we) {
+		return false
+	}
+	switch we.Code {
+	case lspbroker.ErrCodeVersionMismatch,
+		lspbroker.ErrCodeUntrustedRoot,
+		lspbroker.ErrCodeProjectNotFound:
+		return true
 	}
 	return false
-}
-
-// printError writes an error to stderr in the format expected by the CLI.
-func printError(msg, hint string) {
-	fmt.Fprintf(os.Stderr, "error: %s\n", msg)
-	if hint != "" {
-		fmt.Fprintf(os.Stderr, "hint: %s\n", hint)
-	}
 }
