@@ -105,6 +105,9 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 
 	cmd := exec.CommandContext(ctx, cfg.Command[0], cfg.Command[1:]...)
 	cmd.Env = append(os.Environ(), cfg.Env...)
+	// TODO(Q24): set cmd.Dir to the project root so the LSP server doesn't
+	// inherit the daemon's cwd (which may be $HOME or /). Some servers
+	// eagerly scan cwd at startup. See OPEN_QUESTIONS.md#Q24.
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
