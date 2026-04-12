@@ -48,6 +48,11 @@ type Config struct {
 	// process environment is always inherited first; Env values override it.
 	Env []string
 
+	// Dir is the working directory for the subprocess. If empty, the current
+	// process working directory is inherited. Set this to the project root so
+	// the LSP server does not inherit the daemon's cwd (which may be $HOME).
+	Dir string
+
 	// RootURI is the file:// URI of the project root directory.
 	RootURI string
 
@@ -105,9 +110,9 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 
 	cmd := exec.CommandContext(ctx, cfg.Command[0], cfg.Command[1:]...)
 	cmd.Env = append(os.Environ(), cfg.Env...)
-	// TODO(Q24): set cmd.Dir to the project root so the LSP server doesn't
-	// inherit the daemon's cwd (which may be $HOME or /). Some servers
-	// eagerly scan cwd at startup. See OPEN_QUESTIONS.md#Q24.
+	if cfg.Dir != "" {
+		cmd.Dir = cfg.Dir
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

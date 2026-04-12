@@ -37,6 +37,7 @@ func EnsureDaemonRunning(ctx context.Context, cacheDir, selfPath string) error {
 	// process and then blocks for up to 2 s waiting for broker.sock to
 	// appear, so when the command returns the daemon should be ready.
 	cmd := exec.CommandContext(ctx, selfPath, "lspbrokerd", "--detach", "--cache-dir", cacheDir)
+	cmd.Dir = cacheDir
 	cmd.Stdout = nil
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

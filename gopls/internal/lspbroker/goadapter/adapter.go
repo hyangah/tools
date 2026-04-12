@@ -130,6 +130,7 @@ func (s *GoSession) ensureClient(ctx context.Context) (*lspclient.Client, error)
 	rootURI := string(protocol.URIFromPath(s.root))
 	c, err := lspclient.Dial(ctx, lspclient.Config{
 		Command: []string{"gopls", "serve"},
+		Dir:     s.root,
 		RootURI: rootURI,
 	})
 	if err != nil {

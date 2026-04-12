@@ -113,6 +113,7 @@ func (s *GenericSession) ensureClient(ctx context.Context) (*lspclient.Client, e
 	rootURI := string(protocol.URIFromPath(s.root))
 	cfg := lspclient.Config{
 		Command: s.cfg.Command,
+		Dir:     s.root,
 		RootURI: rootURI,
 	}
 
