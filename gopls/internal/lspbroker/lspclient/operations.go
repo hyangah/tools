@@ -5,6 +5,7 @@
 package lspclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -56,12 +57,19 @@ func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]protocol.Doc
 	}
 
 	// The result can be DocumentSymbol[] or SymbolInformation[] per spec.
-	// Try DocumentSymbol[] first (hierarchical, preferred).
-	var symbols []protocol.DocumentSymbol
-	if err := json.Unmarshal(raw, &symbols); err == nil {
-		return symbols, nil
+	// Both decode without error into []DocumentSymbol because Go's JSON
+	// decoder silently ignores unknown fields ("location") and zero-fills
+	// missing ones ("selectionRange"). Distinguish them by checking
+	// whether the raw JSON contains "selectionRange", which only
+	// DocumentSymbol has.
+	if bytes.Contains(raw, []byte(`"selectionRange"`)) {
+		var symbols []protocol.DocumentSymbol
+		if err := json.Unmarshal(raw, &symbols); err == nil {
+			return symbols, nil
+		}
 	}
-	// Fallback: SymbolInformation[] (flat, legacy). Convert to DocumentSymbol.
+	// Fallback: SymbolInformation[] (flat, legacy), or DocumentSymbol
+	// parse failed. Convert to DocumentSymbol.
 	var infos []protocol.SymbolInformation
 	if err := json.Unmarshal(raw, &infos); err != nil {
 		return nil, fmt.Errorf("textDocument/documentSymbol: cannot decode result: %s", string(raw))

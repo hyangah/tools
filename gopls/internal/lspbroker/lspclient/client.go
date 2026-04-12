@@ -401,6 +401,9 @@ func defaultClientCapabilities() *protocol.ClientCapabilities {
 			Definition: &protocol.DefinitionClientCapabilities{
 				LinkSupport: false,
 			},
+			DocumentSymbol: protocol.DocumentSymbolClientCapabilities{
+				HierarchicalDocumentSymbolSupport: true,
+			},
 			Synchronization: &protocol.TextDocumentSyncClientCapabilities{
 				DidSave: true,
 			},
