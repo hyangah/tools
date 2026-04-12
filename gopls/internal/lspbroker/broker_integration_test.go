@@ -134,7 +134,7 @@ func TestBroker_DefinitionEndToEnd(t *testing.T) {
 		Version:   lspbroker.ProtocolVersion,
 		File:      mainGo,
 		Line:      11,
-		Character: 9,
+		Character: lspbroker.IntPtr(9),
 	}
 	var raw json.RawMessage
 	if _, err := conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw); err != nil {
@@ -171,6 +171,177 @@ func TestBroker_DefinitionEndToEnd(t *testing.T) {
 	if got.Range.Start.Character != 5 {
 		t.Errorf("definition result start character = %d (0-based), want 5 (= lib.go col 6 after 'func ')",
 			got.Range.Start.Character)
+	}
+}
+
+// TestBroker_DefinitionNameBased tests the Form A (name-based) path:
+// the broker resolves a symbol name via documentSymbol, then dispatches
+// the positional definition call.
+func TestBroker_DefinitionNameBased(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH; skipping integration test")
+	}
+
+	fixtureDir := filepath.Join("testdata", "foo")
+	tmpDir := t.TempDir()
+	if err := copyDir(fixtureDir, tmpDir); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	mainGo := filepath.Join(tmpDir, "main.go")
+	libGo := filepath.Join(tmpDir, "lib.go")
+
+	cacheDir, err := os.MkdirTemp("", "lsp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cacheDir) })
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	factory := func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	}
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test", factory)
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		b.Serve(serveCtx, l)
+	}()
+	t.Cleanup(func() {
+		cancelServe()
+		b.Stop(context.Background())
+		<-serveDone
+	})
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial broker: %v", err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	conn.Go(serveCtx, jsonrpc2.MethodNotFound)
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancelReq := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelReq()
+
+	if _, err := lspbroker.Handshake(ctx, conn, goplsPath, "test"); err != nil {
+		t.Fatalf("broker.handshake: %v", err)
+	}
+
+	// Test 1: Name-based query for "Greeting" in lib.go.
+	// Greeting is defined at lib.go:5:6 (1-based). Querying the definition
+	// of a symbol at its own definition may return the position itself or
+	// an empty result — both are acceptable. The key test is that
+	// name resolution succeeds (no error).
+	params := lspbroker.DefinitionParams{
+		Version: lspbroker.ProtocolVersion,
+		File:    libGo,
+		Symbol:  "Greeting",
+	}
+	var raw json.RawMessage
+	if _, err := conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw); err != nil {
+		t.Fatalf("lsp.definition (name-based, Greeting in lib.go): %v", err)
+	}
+	t.Logf("name-based Greeting in lib.go: raw=%q", string(raw))
+
+	// Test 2: Name-based query for "main" in main.go. Same pattern —
+	// verifies that name resolution works for a different symbol.
+	params2 := lspbroker.DefinitionParams{
+		Version: lspbroker.ProtocolVersion,
+		File:    mainGo,
+		Symbol:  "main",
+	}
+	if _, err := conn.Call(ctx, lspbroker.DefinitionMethod, params2, &raw); err != nil {
+		t.Fatalf("lsp.definition (name-based, main in main.go): %v", err)
+	}
+	t.Logf("name-based main in main.go: raw=%q", string(raw))
+}
+
+// TestBroker_DefinitionSymbolNotFound tests that a non-existent symbol
+// returns the appropriate error.
+func TestBroker_DefinitionSymbolNotFound(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH; skipping integration test")
+	}
+
+	fixtureDir := filepath.Join("testdata", "foo")
+	tmpDir := t.TempDir()
+	if err := copyDir(fixtureDir, tmpDir); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	libGo := filepath.Join(tmpDir, "lib.go")
+
+	cacheDir, err := os.MkdirTemp("", "lsp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cacheDir) })
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	factory := func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	}
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test", factory)
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		b.Serve(serveCtx, l)
+	}()
+	t.Cleanup(func() {
+		cancelServe()
+		b.Stop(context.Background())
+		<-serveDone
+	})
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial broker: %v", err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	conn.Go(serveCtx, jsonrpc2.MethodNotFound)
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancelReq := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelReq()
+
+	if _, err := lspbroker.Handshake(ctx, conn, goplsPath, "test"); err != nil {
+		t.Fatalf("broker.handshake: %v", err)
+	}
+
+	// Query a symbol that doesn't exist.
+	params := lspbroker.DefinitionParams{
+		Version: lspbroker.ProtocolVersion,
+		File:    libGo,
+		Symbol:  "NonExistentSymbol",
+	}
+	var raw json.RawMessage
+	_, err = conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw)
+	if err == nil {
+		t.Fatal("expected error for non-existent symbol, got nil")
+	}
+	t.Logf("got expected error: %v", err)
+	// The error message should mention "symbol not found".
+	if !strings.Contains(err.Error(), "symbol not found") {
+		t.Errorf("error = %q, want it to contain 'symbol not found'", err)
 	}
 }
 

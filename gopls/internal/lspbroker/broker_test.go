@@ -83,7 +83,7 @@ func TestBroker_RejectMethodBeforeHandshake(t *testing.T) {
 		Version:   ProtocolVersion,
 		File:      "/tmp/foo.go",
 		Line:      1,
-		Character: 1,
+		Character: IntPtr(1),
 	}
 	var result json.RawMessage
 	_, err := conn.Call(ctx, DefinitionMethod, params, &result)
@@ -107,7 +107,7 @@ func TestBroker_DefinitionStub(t *testing.T) {
 		Version:   ProtocolVersion,
 		File:      "/tmp/nonexistent/foo.go",
 		Line:      1,
-		Character: 1,
+		Character: IntPtr(1),
 	}
 	var result json.RawMessage
 	_, err := conn.Call(ctx, DefinitionMethod, params, &result)
@@ -154,7 +154,7 @@ func TestBroker_Sessions(t *testing.T) {
 		Version:   ProtocolVersion,
 		File:      "/tmp/some/file.go",
 		Line:      1,
-		Character: 1,
+		Character: IntPtr(1),
 	}
 	var result json.RawMessage
 	conn.Call(ctx, DefinitionMethod, params, &result) //nolint:errcheck // error expected

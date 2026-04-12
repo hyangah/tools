@@ -56,7 +56,7 @@ func TestGoSession_Definition(t *testing.T) {
 		Version:   lspbroker.ProtocolVersion,
 		File:      mainGo,
 		Line:      11,
-		Character: 9,
+		Character: lspbroker.IntPtr(9),
 	}
 	rawParams, err := json.Marshal(params)
 	if err != nil {

@@ -11,9 +11,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/internal/event"
 	"golang.org/x/tools/internal/jsonrpc2"
 )
@@ -229,9 +231,12 @@ func (b *Broker) dispatch(ctx context.Context, reply jsonrpc2.Replier, req jsonr
 	}
 }
 
-// handleDefinition handles an lsp.definition request. In Phase 1 the
-// session dispatch is a stub and returns ErrNoServer. WS-E and WS-C
-// replace this with a real implementation in Phase 2/3.
+// handleDefinition handles an lsp.definition request. It supports two
+// forms per ADR-007/008:
+//
+//   - Form A (name-based): Symbol is set, Character is nil. The broker
+//     resolves the symbol to a position via documentSymbol, then dispatches.
+//   - Form B (positional): Character is set, Symbol is empty. Direct dispatch.
 func (b *Broker) handleDefinition(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
 	var params DefinitionParams
 	if err := json.Unmarshal(req.Params(), &params); err != nil {
@@ -243,16 +248,124 @@ func (b *Broker) handleDefinition(ctx context.Context, reply jsonrpc2.Replier, r
 	if !filepath.IsAbs(params.File) {
 		return reply(ctx, nil, fmt.Errorf("%w: file must be an absolute path", jsonrpc2.ErrInvalidParams))
 	}
+	// Reject: both symbol and character present.
+	if params.Symbol != "" && params.Character != nil {
+		return reply(ctx, nil, fmt.Errorf("%w: symbol and character are mutually exclusive", jsonrpc2.ErrInvalidParams))
+	}
+	// Reject: neither symbol nor character present.
+	if params.Symbol == "" && params.Character == nil {
+		return reply(ctx, nil, fmt.Errorf("%w: either symbol or character (via file:line:col) is required", jsonrpc2.ErrInvalidParams))
+	}
 
 	sess, err := b.sessionForFile(ctx, params.File)
 	if err != nil {
 		return reply(ctx, nil, err)
 	}
-	raw, err := sess.Handle(ctx, DefinitionMethod, req.Params())
+
+	// Form A: resolve symbol name to a position first.
+	if params.Symbol != "" {
+		resolved, err := b.resolveNamedPosition(ctx, sess, params)
+		if err != nil {
+			return reply(ctx, nil, err)
+		}
+		params = resolved
+	}
+
+	// Dispatch the positional request.
+	raw, err := json.Marshal(params)
 	if err != nil {
 		return reply(ctx, nil, err)
 	}
-	return reply(ctx, json.RawMessage(raw), nil)
+	result, err := sess.Handle(ctx, DefinitionMethod, raw)
+	if err != nil {
+		return reply(ctx, nil, err)
+	}
+	return reply(ctx, json.RawMessage(result), nil)
+}
+
+// resolveNamedPosition resolves a Form A (name-based) request to a Form B
+// (positional) request by calling documentSymbol on the session and
+// matching the symbol name.
+func (b *Broker) resolveNamedPosition(ctx context.Context, sess Session, params DefinitionParams) (DefinitionParams, error) {
+	// Call documentSymbol on the session.
+	dsParams := DocumentSymbolParams{
+		Version: params.Version,
+		File:    params.File,
+	}
+	raw, err := json.Marshal(dsParams)
+	if err != nil {
+		return params, err
+	}
+	result, err := sess.Handle(ctx, DocumentSymbolMethod, raw)
+	if err != nil {
+		return params, err
+	}
+
+	var symbols []protocol.DocumentSymbol
+	if err := json.Unmarshal(result, &symbols); err != nil {
+		return params, fmt.Errorf("decode documentSymbol result: %w", err)
+	}
+
+	// Collect all candidates by walking the tree.
+	type candidate struct {
+		fullName string
+		line     int // 1-based
+		char     int // 1-based
+	}
+	var candidates []candidate
+	var walk func(syms []protocol.DocumentSymbol, prefix string)
+	walk = func(syms []protocol.DocumentSymbol, prefix string) {
+		for _, sym := range syms {
+			fullName := sym.Name
+			if prefix != "" {
+				fullName = prefix + "." + sym.Name
+			}
+			// Check if the full dotted name ends with the user's query.
+			if strings.HasSuffix(fullName, params.Symbol) || sym.Name == params.Symbol {
+				c := candidate{
+					fullName: fullName,
+					line:     int(sym.SelectionRange.Start.Line) + 1, // 0-based → 1-based
+					char:     int(sym.SelectionRange.Start.Character) + 1,
+				}
+				candidates = append(candidates, c)
+			}
+			walk(sym.Children, fullName)
+		}
+	}
+	walk(symbols, "")
+
+	// If line is specified, narrow candidates to those on that line.
+	if params.Line > 0 && len(candidates) > 1 {
+		var narrowed []candidate
+		for _, c := range candidates {
+			if c.line == params.Line {
+				narrowed = append(narrowed, c)
+			}
+		}
+		if len(narrowed) > 0 {
+			candidates = narrowed
+		}
+	}
+
+	switch len(candidates) {
+	case 0:
+		return params, ErrSymbolNotFound
+	case 1:
+		c := candidates[0]
+		return DefinitionParams{
+			Version:   params.Version,
+			File:      params.File,
+			Line:      c.line,
+			Character: IntPtr(c.char),
+		}, nil
+	default:
+		// Ambiguous — return error with candidate list.
+		msg := fmt.Sprintf("ambiguous symbol %q: %d candidates", params.Symbol, len(candidates))
+		for _, c := range candidates {
+			msg += fmt.Sprintf("\n  %s at line %d", c.fullName, c.line)
+		}
+		return params, jsonrpc2.NewError(ErrCodeAmbiguousSymbol, msg)
+	}
 }
 
 // sessionForFile returns the [Session] responsible for the given

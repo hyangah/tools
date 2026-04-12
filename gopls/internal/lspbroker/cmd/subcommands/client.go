@@ -64,15 +64,8 @@ func (bc *BrokerConn) Stop(ctx context.Context) error {
 }
 
 // Definition sends an lsp.definition request to the broker daemon.
-// file must be an absolute path; line and char are 1-based per
-// the broker wire format.
-func (bc *BrokerConn) Definition(ctx context.Context, file string, line, char int) ([]lspbroker.Location, error) {
-	params := lspbroker.DefinitionParams{
-		Version:   lspbroker.ProtocolVersion,
-		File:      file,
-		Line:      line,
-		Character: char,
-	}
+// The params use the discriminated shape per ADR-007/008.
+func (bc *BrokerConn) Definition(ctx context.Context, params lspbroker.DefinitionParams) ([]lspbroker.Location, error) {
 	var locs []lspbroker.Location
 	if _, err := bc.conn.Call(ctx, lspbroker.DefinitionMethod, params, &locs); err != nil {
 		return nil, fmt.Errorf("lsp.definition: %w", err)

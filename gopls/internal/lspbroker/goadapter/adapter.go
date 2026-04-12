@@ -49,6 +49,8 @@ func (s *GoSession) Handle(ctx context.Context, method string, params []byte) ([
 	switch method {
 	case lspbroker.DefinitionMethod:
 		return s.handleDefinition(ctx, params)
+	case lspbroker.DocumentSymbolMethod:
+		return s.handleDocumentSymbol(ctx, params)
 	default:
 		return nil, fmt.Errorf("goadapter: method not implemented: %q", method)
 	}
@@ -126,13 +128,43 @@ func (s *GoSession) handleDefinition(ctx context.Context, rawParams []byte) ([]b
 
 	uri := string(protocol.URIFromPath(req.File))
 	// DefinitionParams uses 1-based line/char; lspclient uses 0-based.
+	char := 0
+	if req.Character != nil {
+		char = *req.Character - 1
+	}
 	locs, err := callWithRetry(ctx, func() ([]protocol.Location, error) {
-		return c.Definition(ctx, uri, uint32(req.Line-1), uint32(req.Character-1))
+		return c.Definition(ctx, uri, uint32(req.Line-1), uint32(char))
 	})
 	if err != nil {
 		return nil, fmt.Errorf("goadapter: definition: %w", err)
 	}
 	return json.Marshal(convertLocations(locs))
+}
+
+func (s *GoSession) handleDocumentSymbol(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req lspbroker.DocumentSymbolParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal DocumentSymbolParams: %w", err)
+	}
+	if req.File == "" {
+		return nil, fmt.Errorf("goadapter: DocumentSymbolParams.File is required")
+	}
+
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: start gopls: %w", err)
+	}
+
+	if err := c.EnsureOpen(ctx, req.File, "go"); err != nil {
+		return nil, fmt.Errorf("goadapter: ensure open %s: %w", req.File, err)
+	}
+
+	uri := string(protocol.URIFromPath(req.File))
+	symbols, err := c.DocumentSymbol(ctx, uri)
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: documentSymbol: %w", err)
+	}
+	return json.Marshal(symbols)
 }
 
 // callWithRetry retries an LSP call on ContentModified (-32801) with

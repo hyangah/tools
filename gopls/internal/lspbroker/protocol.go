@@ -125,24 +125,50 @@ const StopMethod = "broker.stop"
 // DefinitionMethod is the JSON-RPC method name for the lsp.definition request.
 const DefinitionMethod = "lsp.definition"
 
+// DocumentSymbolMethod is the JSON-RPC method name for the
+// lsp.documentSymbol request, used by the broker's name-resolution
+// dispatch to resolve symbol names to positions.
+const DocumentSymbolMethod = "lsp.documentSymbol"
+
 // DefinitionParams are the parameters for an [lsp.definition] request.
-// File must be an absolute path; the CLI resolves relative paths before
-// sending. Line and Character are 1-based (matching what users type on
-// the command line); the broker converts to 0-based before forwarding
-// to the LSP server.
+//
+// The params use a discriminated shape (ADR-007/008):
+//
+//   - Form A (name-based): Symbol is set, Character is nil.
+//     The broker resolves the symbol name to a position via documentSymbol.
+//   - Form B (positional): Character is set, Symbol is empty.
+//     The broker forwards the position directly to the LSP server.
+//
+// File must always be an absolute path. Line and Character are 1-based.
 type DefinitionParams struct {
 	// Version is the broker protocol version for belt-and-suspenders
 	// checking. Must equal [ProtocolVersion].
 	Version int `json:"version"`
 
-	// File is the absolute path to the source file.
+	// File is the absolute path to the source file. Always required.
 	File string `json:"file"`
 
-	// Line is the 1-based line number of the cursor position.
-	Line int `json:"line"`
+	// Symbol is the name to look up (e.g. "Parse", "Server.Serve").
+	// Present in Form A (name-based), absent in Form B (positional).
+	Symbol string `json:"symbol,omitempty"`
 
-	// Character is the 1-based character offset of the cursor position.
-	Character int `json:"character"`
+	// Line is the 1-based line number. Optional in Form A (narrows
+	// disambiguation); required in Form B.
+	Line int `json:"line,omitempty"`
+
+	// Character is the 1-based character offset. Present only in
+	// Form B (positional bypass). Nil in Form A.
+	Character *int `json:"character,omitempty"`
+}
+
+// IntPtr returns a pointer to n. Convenience for constructing
+// DefinitionParams with a Character field.
+func IntPtr(n int) *int { return &n }
+
+// DocumentSymbolParams are the parameters for an [lsp.documentSymbol] request.
+type DocumentSymbolParams struct {
+	Version int    `json:"version"`
+	File    string `json:"file"`
 }
 
 // Position is a 0-based line/character offset, matching LSP's Position
@@ -206,6 +232,19 @@ const (
 	// the trust list.
 	ErrCodeUntrustedRoot = -32007
 
+	// ErrCodeSymbolUnsupported is returned when the LSP server does not
+	// support textDocument/documentSymbol (effectively never fires).
+	ErrCodeSymbolUnsupported = -32008
+
+	// ErrCodeAmbiguousSymbol is returned when the symbol name matches
+	// more than one candidate in the file. The error data contains the
+	// candidate list.
+	ErrCodeAmbiguousSymbol = -32009
+
+	// ErrCodeSymbolNotFound is returned when the symbol name matches
+	// no candidates in the file.
+	ErrCodeSymbolNotFound = -32010
+
 	// ErrCodeContentModified is the LSP-spec code -32801. It surfaces
 	// only after all transparent retries in the broker are exhausted.
 	ErrCodeContentModified = -32801
@@ -241,4 +280,8 @@ var (
 	// ErrUntrustedRoot is returned when the project root has not been
 	// added to the user's trust list.
 	ErrUntrustedRoot = jsonrpc2.NewError(ErrCodeUntrustedRoot, "project root not trusted")
+
+	// ErrSymbolNotFound is returned when the named symbol does not
+	// exist in the target file.
+	ErrSymbolNotFound = jsonrpc2.NewError(ErrCodeSymbolNotFound, "symbol not found")
 )

@@ -64,6 +64,46 @@ func (c *Client) Definition(ctx context.Context, uri string, line, character uin
 	return out, nil
 }
 
+// DocumentSymbol returns the document symbol tree for the file identified by uri.
+// The file must already be open on the server (see [Client.EnsureOpen]).
+func (c *Client) DocumentSymbol(ctx context.Context, uri string) ([]protocol.DocumentSymbol, error) {
+	params := &protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{
+			URI: protocol.DocumentURI(uri),
+		},
+	}
+
+	var raw json.RawMessage
+	if _, err := c.conn.Call(ctx, "textDocument/documentSymbol", params, &raw); err != nil {
+		return nil, fmt.Errorf("textDocument/documentSymbol: %w", err)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+
+	// The result can be DocumentSymbol[] or SymbolInformation[] per spec.
+	// Try DocumentSymbol[] first (hierarchical, preferred).
+	var symbols []protocol.DocumentSymbol
+	if err := json.Unmarshal(raw, &symbols); err == nil {
+		return symbols, nil
+	}
+	// Fallback: SymbolInformation[] (flat, legacy). Convert to DocumentSymbol.
+	var infos []protocol.SymbolInformation
+	if err := json.Unmarshal(raw, &infos); err != nil {
+		return nil, fmt.Errorf("textDocument/documentSymbol: cannot decode result: %s", string(raw))
+	}
+	out := make([]protocol.DocumentSymbol, len(infos))
+	for i, info := range infos {
+		out[i] = protocol.DocumentSymbol{
+			Name:           info.Name,
+			Kind:           info.Kind,
+			Range:          info.Location.Range,
+			SelectionRange: info.Location.Range,
+		}
+	}
+	return out, nil
+}
+
 // ExecuteCommand is the escape hatch for workspace/executeCommand.
 func (c *Client) ExecuteCommand(ctx context.Context, name string, args ...json.RawMessage) (json.RawMessage, error) {
 	params := struct {
