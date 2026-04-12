@@ -270,6 +270,68 @@ const (
 	ErrCodeContentModified = -32801
 )
 
+// RenameMethod is the JSON-RPC method name for the lsp.rename request.
+const RenameMethod = "lsp.rename"
+
+// RenameParams are the parameters for an [lsp.rename] request.
+//
+// The params use the same discriminated shape as [DefinitionParams]
+// (ADR-007/008): Form A (symbol + file) for name-based resolution or
+// Form B (file + line + character) for positional lookup.
+//
+// File must always be an absolute path. Line and Character are 1-based.
+// NewName is the replacement identifier and must not be empty.
+// DryRun, if true, causes the broker to compute and return the edit plan
+// without writing any files to disk.
+type RenameParams struct {
+	// Version is the broker protocol version for belt-and-suspenders
+	// checking. Must equal [ProtocolVersion].
+	Version int `json:"version"`
+
+	// File is the absolute path to the source file containing the symbol.
+	// Always required.
+	File string `json:"file"`
+
+	// Symbol is the name to look up (e.g. "Parse", "Server.Serve").
+	// Present in Form A (name-based), absent in Form B (positional).
+	Symbol string `json:"symbol,omitempty"`
+
+	// Line is the 1-based line number. Optional in Form A (narrows
+	// disambiguation); required in Form B.
+	Line int `json:"line,omitempty"`
+
+	// Character is the 1-based character offset. Present only in
+	// Form B (positional bypass). Nil in Form A.
+	Character *int `json:"character,omitempty"`
+
+	// NewName is the replacement identifier. Must not be empty.
+	NewName string `json:"newName"`
+
+	// DryRun, if true, causes the broker to compute the edit plan and
+	// return it without writing any files. Applied is false in the result.
+	DryRun bool `json:"dryRun,omitempty"`
+}
+
+// RenameResult is the response to a successful [lsp.rename] request.
+type RenameResult struct {
+	// Changes is a summary of the per-file edits that were (or would be)
+	// applied. The slice is ordered by file path.
+	Changes []FileChange `json:"changes"`
+
+	// Applied is true when the edits were written to disk (i.e. DryRun
+	// was false). It is false for dry-run results.
+	Applied bool `json:"applied"`
+}
+
+// FileChange summarises the edits made (or proposed) in one file.
+type FileChange struct {
+	// Path is the absolute path of the file.
+	Path string `json:"path"`
+
+	// Edits is the number of text substitutions applied in this file.
+	Edits int `json:"edits"`
+}
+
 // DiagnosticsMethod is the JSON-RPC method for retrieving diagnostics.
 const DiagnosticsMethod = "lsp.diagnostics"
 

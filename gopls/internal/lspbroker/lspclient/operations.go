@@ -220,6 +220,27 @@ func decodeLocations(raw json.RawMessage, method string) ([]protocol.Location, e
 	return out, nil
 }
 
+// Rename requests a workspace rename of the symbol at the given (zero-based)
+// position inside the document identified by uri. newName is the replacement
+// identifier. The file must already be open on the server (see [Client.EnsureOpen]).
+//
+// It returns the [protocol.WorkspaceEdit] describing the changes to apply, or
+// nil if the server returns no edits.
+func (c *Client) Rename(ctx context.Context, uri string, line, character uint32, newName string) (*protocol.WorkspaceEdit, error) {
+	params := &protocol.RenameParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: protocol.DocumentURI(uri)},
+			Position:     protocol.Position{Line: line, Character: character},
+		},
+		NewName: newName,
+	}
+	var result protocol.WorkspaceEdit
+	if _, err := c.conn.Call(ctx, "textDocument/rename", params, &result); err != nil {
+		return nil, fmt.Errorf("textDocument/rename: %w", err)
+	}
+	return &result, nil
+}
+
 // ExecuteCommand is the escape hatch for workspace/executeCommand.
 func (c *Client) ExecuteCommand(ctx context.Context, name string, args ...json.RawMessage) (json.RawMessage, error) {
 	params := struct {

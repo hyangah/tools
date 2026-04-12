@@ -403,6 +403,9 @@ func defaultClientCapabilities() *protocol.ClientCapabilities {
 			PublishDiagnostics: protocol.PublishDiagnosticsClientCapabilities{
 				VersionSupport: true,
 			},
+			Rename: &protocol.RenameClientCapabilities{
+				PrepareSupport: true,
+			},
 		},
 		Workspace: protocol.WorkspaceClientCapabilities{
 			WorkspaceFolders: true,
