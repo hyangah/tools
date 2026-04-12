@@ -51,6 +51,12 @@ type Broker struct {
 	// function keyed by filepath.Dir(file). Used in tests.
 	SessionOverride func(root string) Session
 
+	// TrustStore, if non-nil, is consulted before loading .lsp.json
+	// configs. Untrusted roots with .lsp.json present return
+	// [ErrUntrustedRoot]. Go auto-config (no .lsp.json) skips the
+	// trust check. If nil, all roots are trusted.
+	TrustStore *TrustStore
+
 	// IdleTimeout is how long the broker waits with no requests before
 	// shutting itself down. Zero means no idle timeout.
 	IdleTimeout time.Duration
@@ -469,6 +475,20 @@ func (b *Broker) sessionForFile(ctx context.Context, file string) (Session, erro
 	cfg, err := LoadConfig(root)
 	if err != nil {
 		return nil, fmt.Errorf("broker: load config for %s: %w", root, err)
+	}
+
+	// Trust check: if .lsp.json exists but the root is not trusted,
+	// block non-Go requests. Go auto-config is safe (no user-controlled
+	// commands) so it skips the trust check.
+	if cfg != nil && b.TrustStore != nil && !b.TrustStore.IsTrusted(root) {
+		// Go auto-config can still proceed for Go extensions.
+		if !isGoExt(ext) {
+			return nil, fmt.Errorf("%w: project root %s has .lsp.json but is not trusted; run: gopls lspcli trust add %s",
+				ErrUntrustedRoot, root, root)
+		}
+		// For Go extensions, fall through to Go auto-config below
+		// (which doesn't use .lsp.json).
+		cfg = nil
 	}
 
 	// Go auto-config: .go/.mod/.sum files in a Go project.

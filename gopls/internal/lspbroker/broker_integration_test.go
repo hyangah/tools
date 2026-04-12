@@ -906,6 +906,153 @@ func TestBroker_GoAutoConfigPriority(t *testing.T) {
 	}
 }
 
+// TestBroker_UntrustedMultiLanguage verifies trust enforcement:
+// - .go queries succeed (Go auto-config skips trust)
+// - .fake queries fail with ErrUntrustedRoot when root is not trusted
+// - .fake queries succeed after trusting the root
+func TestBroker_UntrustedMultiLanguage(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH; skipping integration test")
+	}
+
+	// Build fakelsp.
+	fakeLSPBin := filepath.Join(t.TempDir(), "fakelsp")
+	buildCmd := exec.Command("go", "build", "-o", fakeLSPBin, "./testdata/fakelsp")
+	buildCmd.Dir = "."
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fakelsp: %v\n%s", err, out)
+	}
+
+	fixtureDir := filepath.Join("testdata", "multilang")
+	tmpDir := t.TempDir()
+	if err := copyDir(fixtureDir, tmpDir); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	mainGo := filepath.Join(tmpDir, "main.go")
+	appFake := filepath.Join(tmpDir, "app.fake")
+
+	// Write .lsp.json.
+	lspConfig := fmt.Sprintf(`{
+		"version": 1,
+		"servers": {
+			"fake": {
+				"command": [%q],
+				"extensionToLanguage": { ".fake": "fake" }
+			}
+		}
+	}`, fakeLSPBin)
+	os.WriteFile(filepath.Join(tmpDir, ".lsp.json"), []byte(lspConfig), 0644)
+
+	// Create an empty trust store (nothing trusted).
+	trustFile := filepath.Join(t.TempDir(), "trusted.json")
+	ts, err := lspbroker.LoadTrustStore(trustFile)
+	if err != nil {
+		t.Fatalf("load trust store: %v", err)
+	}
+
+	cacheDir, err := os.MkdirTemp("", "lsp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cacheDir) })
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	}
+	b.TrustStore = ts
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		b.Serve(serveCtx, l)
+	}()
+	t.Cleanup(func() {
+		cancelServe()
+		b.Stop(context.Background())
+		<-serveDone
+	})
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	conn.Go(serveCtx, jsonrpc2.MethodNotFound)
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if _, err := lspbroker.Handshake(ctx, conn, goplsPath, "test"); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+
+	// .go should work (Go auto-config skips trust).
+	t.Run("go_succeeds_untrusted", func(t *testing.T) {
+		params := lspbroker.DefinitionParams{
+			Version:   lspbroker.ProtocolVersion,
+			File:      mainGo,
+			Line:      11,
+			Character: lspbroker.IntPtr(14),
+		}
+		var raw json.RawMessage
+		if _, err := conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw); err != nil {
+			t.Fatalf("lsp.definition on .go in untrusted root should succeed: %v", err)
+		}
+		t.Logf(".go succeeded in untrusted root")
+	})
+
+	// .fake should fail (untrusted root).
+	t.Run("fake_blocked_untrusted", func(t *testing.T) {
+		params := lspbroker.DefinitionParams{
+			Version:   lspbroker.ProtocolVersion,
+			File:      appFake,
+			Line:      1,
+			Character: lspbroker.IntPtr(1),
+		}
+		var raw json.RawMessage
+		_, err := conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw)
+		if err == nil {
+			t.Fatal("expected ErrUntrustedRoot for .fake in untrusted root, got nil")
+		}
+		if !strings.Contains(err.Error(), "not trusted") {
+			t.Fatalf("expected 'not trusted' error, got: %v", err)
+		}
+		t.Logf(".fake blocked (expected): %v", err)
+	})
+
+	// Trust the root, then .fake should succeed.
+	t.Run("fake_succeeds_after_trust", func(t *testing.T) {
+		if err := ts.Add(tmpDir); err != nil {
+			t.Fatalf("trust add: %v", err)
+		}
+
+		params := lspbroker.DefinitionParams{
+			Version:   lspbroker.ProtocolVersion,
+			File:      appFake,
+			Line:      1,
+			Character: lspbroker.IntPtr(1),
+		}
+		var raw json.RawMessage
+		if _, err := conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw); err != nil {
+			t.Fatalf("lsp.definition on .fake after trust: %v", err)
+		}
+		t.Logf(".fake succeeded after trusting root")
+	})
+}
+
 // copyDir recursively copies the contents of src into dst (which must
 // exist). Duplicated from goadapter/adapter_integration_test.go because
 // that file lives in a different external test package and its helpers

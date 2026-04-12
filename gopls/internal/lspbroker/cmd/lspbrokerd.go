@@ -65,6 +65,16 @@ func runDaemon(ctx context.Context, cacheDir string) error {
 		return goadapter.NewGoSession(root)
 	}
 
+	// Load trust store for .lsp.json validation.
+	trustPath := lspbroker.DefaultTrustStorePath()
+	ts, err := lspbroker.LoadTrustStore(trustPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lspbrokerd: warning: could not load trust store %s: %v\n", trustPath, err)
+		// Continue without trust enforcement.
+	} else {
+		b.TrustStore = ts
+	}
+
 	// Idle timeout: default 30 minutes, overridable via env.
 	idleTimeout := 30 * time.Minute
 	if s := os.Getenv("LSP_BROKER_IDLE_TIMEOUT"); s != "" {
