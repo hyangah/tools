@@ -279,6 +279,22 @@ func (b *Broker) handlePositionalOp(ctx context.Context, reply jsonrpc2.Replier,
 	if err != nil {
 		return reply(ctx, nil, err)
 	}
+
+	// If the LSP server returned null/empty for a definition request,
+	// the cursor is already at the definition. Return the queried
+	// position as the result so the caller gets a location instead of
+	// an empty response.
+	if req.Method() == DefinitionMethod && (len(result) == 0 || string(result) == "null") {
+		selfLoc := []Location{{
+			URI: "file://" + params.File,
+			Range: Range{
+				Start: Position{Line: params.Line - 1, Character: *params.Character - 1},
+				End:   Position{Line: params.Line - 1, Character: *params.Character - 1},
+			},
+		}}
+		result, _ = json.Marshal(selfLoc)
+	}
+
 	return reply(ctx, json.RawMessage(result), nil)
 }
 
