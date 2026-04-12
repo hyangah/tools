@@ -64,6 +64,8 @@ func (s *GenericSession) Handle(ctx context.Context, method string, params []byt
 		return s.handleIncomingCalls(ctx, params)
 	case OutgoingCallsMethod:
 		return s.handleOutgoingCalls(ctx, params)
+	case RenameMethod:
+		return s.handleRename(ctx, params)
 	default:
 		return nil, fmt.Errorf("generic: method not implemented: %q", method)
 	}
@@ -344,6 +346,45 @@ func (s *GenericSession) handleOutgoingCalls(ctx context.Context, rawParams []by
 		return nil, fmt.Errorf("generic: outgoingCalls: %w", err)
 	}
 	return json.Marshal(calls)
+}
+
+func (s *GenericSession) handleRename(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req RenameParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("generic: unmarshal RenameParams: %w", err)
+	}
+	if req.File == "" {
+		return nil, fmt.Errorf("generic: RenameParams.File is required")
+	}
+	if req.NewName == "" {
+		return nil, fmt.Errorf("generic: RenameParams.NewName is required")
+	}
+
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	langID := s.languageID(req.File)
+	if err := c.EnsureOpen(ctx, req.File, langID); err != nil {
+		return nil, fmt.Errorf("generic: ensure open %s: %w", req.File, err)
+	}
+
+	uri := string(protocol.URIFromPath(req.File))
+	char := 0
+	if req.Character != nil {
+		char = *req.Character - 1
+	}
+	we, err := genericCallWithRetry(ctx, func() (*protocol.WorkspaceEdit, error) {
+		return c.Rename(ctx, uri, uint32(req.Line-1), uint32(char), req.NewName)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("generic: rename: %w", err)
+	}
+	if we == nil {
+		return json.Marshal(&protocol.WorkspaceEdit{})
+	}
+	return json.Marshal(we)
 }
 
 // genericCallWithRetry retries an LSP call on ContentModified (-32801).

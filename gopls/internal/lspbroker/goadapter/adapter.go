@@ -83,6 +83,8 @@ func (s *GoSession) Handle(ctx context.Context, method string, params []byte) ([
 		return s.handleIncomingCalls(ctx, params)
 	case lspbroker.OutgoingCallsMethod:
 		return s.handleOutgoingCalls(ctx, params)
+	case lspbroker.RenameMethod:
+		return s.handleRename(ctx, params)
 	default:
 		return nil, fmt.Errorf("goadapter: method not implemented: %q", method)
 	}
@@ -372,6 +374,45 @@ func (s *GoSession) handleOutgoingCalls(ctx context.Context, rawParams []byte) (
 		return nil, fmt.Errorf("goadapter: outgoingCalls: %w", err)
 	}
 	return json.Marshal(calls)
+}
+
+func (s *GoSession) handleRename(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req lspbroker.RenameParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal RenameParams: %w", err)
+	}
+	if req.File == "" {
+		return nil, fmt.Errorf("goadapter: RenameParams.File is required")
+	}
+	if req.NewName == "" {
+		return nil, fmt.Errorf("goadapter: RenameParams.NewName is required")
+	}
+
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: start gopls: %w", err)
+	}
+
+	if err := c.EnsureOpen(ctx, req.File, "go"); err != nil {
+		return nil, fmt.Errorf("goadapter: ensure open %s: %w", req.File, err)
+	}
+
+	uri := string(protocol.URIFromPath(req.File))
+	char := 0
+	if req.Character != nil {
+		char = *req.Character - 1
+	}
+	we, err := callWithRetry(ctx, func() (*protocol.WorkspaceEdit, error) {
+		return c.Rename(ctx, uri, uint32(req.Line-1), uint32(char), req.NewName)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: rename: %w", err)
+	}
+	if we == nil {
+		// Empty workspace edit: return an empty result.
+		return json.Marshal(&protocol.WorkspaceEdit{})
+	}
+	return json.Marshal(we)
 }
 
 // callWithRetry retries an LSP call on ContentModified (-32801) with

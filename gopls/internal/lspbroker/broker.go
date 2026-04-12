@@ -263,6 +263,8 @@ func (b *Broker) dispatch(ctx context.Context, reply jsonrpc2.Replier, req jsonr
 	case DocumentSymbolMethod, WorkspaceSymbolMethod,
 		IncomingCallsMethod, OutgoingCallsMethod:
 		return b.handlePassthrough(ctx, reply, req)
+	case RenameMethod:
+		return b.handleRename(ctx, reply, req)
 	case DiagnosticsMethod:
 		return b.handleDiagnostics(ctx, reply, req)
 	case SyncMethod:
@@ -377,6 +379,100 @@ func (b *Broker) handlePassthrough(ctx context.Context, reply jsonrpc2.Replier, 
 		return reply(ctx, nil, err)
 	}
 	return reply(ctx, json.RawMessage(result), nil)
+}
+
+// handleRename handles the lsp.rename request. Unlike handlePositionalOp, the
+// post-resolution flow diverges: it must decode the WorkspaceEdit returned by
+// the session, apply (or dry-run) it on disk, sync each changed file back to
+// the LSP server, and return a RenameResult.
+func (b *Broker) handleRename(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
+	var params RenameParams
+	if err := json.Unmarshal(req.Params(), &params); err != nil {
+		return reply(ctx, nil, fmt.Errorf("%w: %v", jsonrpc2.ErrInvalidParams, err))
+	}
+	if params.File == "" {
+		return reply(ctx, nil, fmt.Errorf("%w: file is required", jsonrpc2.ErrInvalidParams))
+	}
+	if !filepath.IsAbs(params.File) {
+		return reply(ctx, nil, fmt.Errorf("%w: file must be an absolute path", jsonrpc2.ErrInvalidParams))
+	}
+	if params.NewName == "" {
+		return reply(ctx, nil, fmt.Errorf("%w: newName is required", jsonrpc2.ErrInvalidParams))
+	}
+	if params.Symbol != "" && params.Character != nil {
+		return reply(ctx, nil, fmt.Errorf("%w: symbol and character are mutually exclusive", jsonrpc2.ErrInvalidParams))
+	}
+	if params.Symbol == "" && params.Character == nil {
+		return reply(ctx, nil, fmt.Errorf("%w: either symbol or character (via file:line:col) is required", jsonrpc2.ErrInvalidParams))
+	}
+
+	sess, err := b.sessionForFile(ctx, params.File)
+	if err != nil {
+		return reply(ctx, nil, err)
+	}
+
+	// Form A: resolve symbol name to position.
+	defParams := DefinitionParams{
+		Version:   params.Version,
+		File:      params.File,
+		Symbol:    params.Symbol,
+		Line:      params.Line,
+		Character: params.Character,
+	}
+	if defParams.Symbol != "" {
+		resolved, err := b.resolveNamedPosition(ctx, sess, defParams)
+		if err != nil {
+			return reply(ctx, nil, err)
+		}
+		defParams = resolved
+	}
+
+	// Build wire params for the session's handleRename.
+	renameParams := RenameParams{
+		Version:   params.Version,
+		File:      defParams.File,
+		Line:      defParams.Line,
+		Character: defParams.Character,
+		NewName:   params.NewName,
+		DryRun:    params.DryRun,
+	}
+	raw, err := json.Marshal(renameParams)
+	if err != nil {
+		return reply(ctx, nil, err)
+	}
+
+	// The session returns a JSON-encoded protocol.WorkspaceEdit.
+	resultRaw, err := sess.Handle(ctx, RenameMethod, raw)
+	if err != nil {
+		return reply(ctx, nil, err)
+	}
+
+	var we protocol.WorkspaceEdit
+	if err := json.Unmarshal(resultRaw, &we); err != nil {
+		return reply(ctx, nil, fmt.Errorf("broker: decode WorkspaceEdit: %w", err))
+	}
+
+	result, err := ApplyWorkspaceEdit(&we, params.DryRun)
+	if err != nil {
+		return reply(ctx, nil, fmt.Errorf("broker: apply edits: %w", err))
+	}
+
+	// After applying, sync each changed file back to the LSP server so that
+	// subsequent requests see the updated content.
+	if result.Applied {
+		for _, fc := range result.Changes {
+			if syncErr := sess.Sync(ctx, fc.Path); syncErr != nil {
+				// Non-fatal: log but don't fail the rename.
+				event.Log(ctx, fmt.Sprintf("broker: sync %s after rename: %v", fc.Path, syncErr))
+			}
+		}
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return reply(ctx, nil, err)
+	}
+	return reply(ctx, json.RawMessage(encoded), nil)
 }
 
 // handleDiagnostics handles the lsp.diagnostics request.
