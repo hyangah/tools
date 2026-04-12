@@ -134,3 +134,23 @@ func (bc *BrokerConn) PrepareCallHierarchy(ctx context.Context, params lspbroker
 	}
 	return result, nil
 }
+
+// Diagnostics sends an lsp.diagnostics request to the broker daemon.
+// Returns raw JSON which may be a []protocol.Diagnostic (file) or
+// map[string][]protocol.Diagnostic (project).
+func (bc *BrokerConn) Diagnostics(ctx context.Context, params lspbroker.DiagnosticsParams) (json.RawMessage, error) {
+	var result json.RawMessage
+	if _, err := bc.conn.Call(ctx, lspbroker.DiagnosticsMethod, params, &result); err != nil {
+		return nil, fmt.Errorf("lsp.diagnostics: %w", err)
+	}
+	return result, nil
+}
+
+// Sync sends an lsp.sync request to the broker daemon, asking it to
+// re-read filePath and send didChange to the language server.
+func (bc *BrokerConn) Sync(ctx context.Context, params lspbroker.SyncParams) error {
+	if _, err := bc.conn.Call(ctx, lspbroker.SyncMethod, params, nil); err != nil {
+		return fmt.Errorf("lsp.sync: %w", err)
+	}
+	return nil
+}

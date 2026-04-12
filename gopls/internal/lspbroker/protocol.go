@@ -270,6 +270,26 @@ const (
 	ErrCodeContentModified = -32801
 )
 
+// DiagnosticsMethod is the JSON-RPC method for retrieving diagnostics.
+const DiagnosticsMethod = "lsp.diagnostics"
+
+// SyncMethod is the JSON-RPC method for forcing a file re-sync.
+const SyncMethod = "lsp.sync"
+
+// DiagnosticsParams are the parameters for an [lsp.diagnostics] request.
+// Either File or Project must be set; they are mutually exclusive.
+type DiagnosticsParams struct {
+	Version int    `json:"version"`
+	File    string `json:"file,omitempty"`    // specific file (absolute path)
+	Project bool   `json:"project,omitempty"` // if true, return all project diagnostics
+}
+
+// SyncParams are the parameters for an [lsp.sync] request.
+type SyncParams struct {
+	Version int    `json:"version"`
+	File    string `json:"file"` // absolute path to the file to re-sync
+}
+
 // Broker-specific sentinel errors. Use errors.Is or errors.As to
 // unwrap from jsonrpc2.WireError values.
 var (

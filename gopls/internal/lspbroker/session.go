@@ -52,6 +52,11 @@ type Session interface {
 	// "lsp.definition"). Handle must be safe for concurrent use.
 	Handle(ctx context.Context, method string, params []byte) ([]byte, error)
 
+	// Sync forces the session to re-read the file at filePath from disk
+	// and send a textDocument/didChange to the LSP server, regardless of
+	// the current fingerprint. It is called by the lsp.sync broker command.
+	Sync(ctx context.Context, filePath string) error
+
 	// Close shuts down the session's LSP server processes and releases
 	// associated resources. It is called when the broker is stopping or
 	// when the session has been idle for too long.
@@ -74,6 +79,8 @@ func (s *stubSession) Root() string { return s.root }
 func (s *stubSession) Handle(_ context.Context, method string, _ []byte) ([]byte, error) {
 	return nil, errMethodNotImplemented(method)
 }
+
+func (s *stubSession) Sync(_ context.Context, _ string) error { return nil }
 
 func (s *stubSession) Close() error { return nil }
 

@@ -26,12 +26,30 @@ import (
 // TODO(WS-D Phase 2): switch to "gopls -remote=auto serve" by default
 // so that the broker shares an existing editor gopls daemon.
 type GoSession struct {
-	root string
+	root      string
+	diagStore interface {
+		Update(uri string, version int32, serverID string, diags []protocol.Diagnostic)
+	}
+	serverID string
 
 	mu           sync.Mutex
 	client       *lspclient.Client // nil until first request; guarded by mu
 	restartCount int               // number of crash recoveries performed
 	maxRestarts  int               // crash recovery limit (default 3)
+}
+
+// SetDiagStore wires a diagnostics store into the session. It must be
+// called before the first Handle call. The ds parameter must implement
+// the Update method; pass lspbroker.DiagStore. The serverID identifies
+// this session's server in the store.
+//
+// The parameter type is an anonymous interface to avoid a circular
+// import between goadapter and lspbroker.
+func (s *GoSession) SetDiagStore(ds interface {
+	Update(uri string, version int32, serverID string, diags []protocol.Diagnostic)
+}, serverID string) {
+	s.diagStore = ds
+	s.serverID = serverID
 }
 
 // NewGoSession creates a GoSession for the given workspace root.
@@ -117,8 +135,26 @@ func (s *GoSession) ensureClient(ctx context.Context) (*lspclient.Client, error)
 	if err != nil {
 		return nil, fmt.Errorf("goadapter: dial gopls: %w", err)
 	}
+	// Register diagnostics callback.
+	ds := s.diagStore
+	sid := s.serverID
+	c.OnDiagnostics(func(uri string, version int32, diags []protocol.Diagnostic) {
+		if ds != nil {
+			ds.Update(uri, version, sid, diags)
+		}
+	})
 	s.client = c
 	return c, nil
+}
+
+// Sync forces the session to re-read filePath from disk and send a
+// textDocument/didChange to gopls, regardless of fingerprint.
+func (s *GoSession) Sync(ctx context.Context, filePath string) error {
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return fmt.Errorf("goadapter: start gopls: %w", err)
+	}
+	return c.ForceSync(ctx, filePath, "go")
 }
 
 func (s *GoSession) handleDefinition(ctx context.Context, rawParams []byte) ([]byte, error) {

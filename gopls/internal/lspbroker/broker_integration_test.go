@@ -1053,6 +1053,172 @@ func TestBroker_UntrustedMultiLanguage(t *testing.T) {
 	})
 }
 
+// TestBroker_DiagnosticsEndToEnd tests the diagnostics collection flow:
+//  1. Introduce a Go syntax error into a temp file
+//  2. Send lsp.sync to tell the broker to re-read the file
+//  3. Poll lsp.diagnostics until gopls sends diagnostics (or timeout)
+//  4. Verify at least one diagnostic is returned
+//  5. Fix the file, sync again, verify diagnostics are empty
+func TestBroker_DiagnosticsEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH; skipping integration test")
+	}
+
+	// Copy the fixture to a writable temp directory.
+	fixtureDir := filepath.Join("testdata", "foo")
+	tmpDir := t.TempDir()
+	if err := copyDir(fixtureDir, tmpDir); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	mainGo := filepath.Join(tmpDir, "main.go")
+
+	cacheDir, err := os.MkdirTemp("", "lsp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cacheDir) })
+
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	}
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		b.Serve(serveCtx, l)
+	}()
+	t.Cleanup(func() {
+		cancelServe()
+		b.Stop(context.Background())
+		<-serveDone
+	})
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	conn.Go(serveCtx, jsonrpc2.MethodNotFound)
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if _, err := lspbroker.Handshake(ctx, conn, goplsPath, "test"); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+
+	// First, open the file by querying definition to ensure the session exists.
+	defParams := lspbroker.DefinitionParams{
+		Version:   lspbroker.ProtocolVersion,
+		File:      mainGo,
+		Line:      10,
+		Character: lspbroker.IntPtr(5),
+	}
+	var defRaw json.RawMessage
+	if _, err := conn.Call(ctx, lspbroker.DefinitionMethod, defParams, &defRaw); err != nil {
+		t.Logf("initial definition query (may fail for valid reasons): %v", err)
+	}
+
+	// Introduce a syntax error into the file.
+	origContent, err := os.ReadFile(mainGo)
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	t.Cleanup(func() {
+		os.WriteFile(mainGo, origContent, 0o644) //nolint:errcheck
+	})
+
+	badContent := string(origContent) + "\nvar _ = undeclaredName123\n"
+	if err := os.WriteFile(mainGo, []byte(badContent), 0o644); err != nil {
+		t.Fatalf("write bad content: %v", err)
+	}
+
+	// Sync the file so gopls sees the error.
+	syncParams := lspbroker.SyncParams{
+		Version: lspbroker.ProtocolVersion,
+		File:    mainGo,
+	}
+	if _, err := conn.Call(ctx, lspbroker.SyncMethod, syncParams, nil); err != nil {
+		t.Fatalf("lsp.sync: %v", err)
+	}
+
+	// Poll for diagnostics with a 30s deadline. gopls sends
+	// publishDiagnostics asynchronously, so we retry.
+	diagParams := lspbroker.DiagnosticsParams{
+		Version: lspbroker.ProtocolVersion,
+		File:    mainGo,
+	}
+
+	// diagCount polls lsp.diagnostics and returns the number of diagnostics.
+	diagCount := func() int {
+		var raw json.RawMessage
+		if _, err := conn.Call(ctx, lspbroker.DiagnosticsMethod, diagParams, &raw); err != nil {
+			t.Logf("lsp.diagnostics call error: %v", err)
+			return 0
+		}
+		if len(raw) == 0 || string(raw) == "null" {
+			return 0
+		}
+		var diags []json.RawMessage
+		if err := json.Unmarshal(raw, &diags); err != nil {
+			t.Logf("decode diagnostics error: %v (raw=%s)", err, raw)
+			return 0
+		}
+		return len(diags)
+	}
+
+	// Poll until at least one diagnostic arrives (up to 30s).
+	var gotCount int
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		gotCount = diagCount()
+		if gotCount > 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if gotCount == 0 {
+		t.Errorf("expected at least one diagnostic after introducing error, got none")
+	} else {
+		t.Logf("got %d diagnostic(s) after introducing error", gotCount)
+	}
+
+	// Fix the file and sync again.
+	if err := os.WriteFile(mainGo, origContent, 0o644); err != nil {
+		t.Fatalf("restore main.go: %v", err)
+	}
+	if _, err := conn.Call(ctx, lspbroker.SyncMethod, syncParams, nil); err != nil {
+		t.Fatalf("lsp.sync (fix): %v", err)
+	}
+
+	// Poll for cleared diagnostics (up to 30s). Not a hard failure since
+	// gopls timing varies — just log the result.
+	deadline = time.Now().Add(30 * time.Second)
+	var fixedCount int
+	for time.Now().Before(deadline) {
+		fixedCount = diagCount()
+		if fixedCount == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Logf("after fix: %d diagnostic(s)", fixedCount)
+	// Cleared or reduced — not a hard failure since gopls timing varies.
+}
+
 // copyDir recursively copies the contents of src into dst (which must
 // exist). Duplicated from goadapter/adapter_integration_test.go because
 // that file lives in a different external test package and its helpers

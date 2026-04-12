@@ -22,8 +22,10 @@ import (
 // via .lsp.json. It lazily spawns the server subprocess on the first
 // Handle call and keeps it alive until [GenericSession.Close] is called.
 type GenericSession struct {
-	root string
-	cfg  *ServerConfig
+	root      string
+	cfg       *ServerConfig
+	diagStore *DiagStore
+	serverID  string
 
 	mu           sync.Mutex
 	client       *lspclient.Client
@@ -33,8 +35,8 @@ type GenericSession struct {
 // NewGenericSession creates a GenericSession for the given workspace root
 // and server configuration. No subprocess is started until the first
 // Handle call.
-func NewGenericSession(root string, cfg *ServerConfig) *GenericSession {
-	return &GenericSession{root: root, cfg: cfg}
+func NewGenericSession(root string, cfg *ServerConfig, diagStore *DiagStore, serverID string) *GenericSession {
+	return &GenericSession{root: root, cfg: cfg, diagStore: diagStore, serverID: serverID}
 }
 
 // Root returns the absolute path to the workspace root directory.
@@ -139,8 +141,27 @@ func (s *GenericSession) ensureClient(ctx context.Context) (*lspclient.Client, e
 	if err != nil {
 		return nil, fmt.Errorf("generic: dial %v: %w", s.cfg.Command, err)
 	}
+	// Register diagnostics callback.
+	ds := s.diagStore
+	sid := s.serverID
+	c.OnDiagnostics(func(uri string, version int32, diags []protocol.Diagnostic) {
+		if ds != nil {
+			ds.Update(uri, version, sid, diags)
+		}
+	})
 	s.client = c
 	return c, nil
+}
+
+// Sync forces the session to re-read filePath from disk and send a
+// textDocument/didChange to the LSP server, regardless of fingerprint.
+func (s *GenericSession) Sync(ctx context.Context, filePath string) error {
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return err
+	}
+	langID := s.languageID(filePath)
+	return c.ForceSync(ctx, filePath, langID)
 }
 
 // languageID returns the LSP language identifier for the given file path,

@@ -188,6 +188,57 @@ func (c *Client) EnsureOpen(ctx context.Context, filePath string, languageID str
 	return nil
 }
 
+// ForceSync always re-reads the file at filePath and sends
+// textDocument/didOpen or textDocument/didChange regardless of the
+// current fingerprint. It is used by the lsp.sync broker command to
+// push an explicit re-sync after an editor modifies a file.
+func (c *Client) ForceSync(ctx context.Context, filePath string, languageID string) error {
+	const maxSyncBytes = 10 << 20 // 10 MB
+
+	fi, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("lspclient.ForceSync: stat %s: %w", filePath, err)
+	}
+	if fi.Size() > maxSyncBytes {
+		return fmt.Errorf("lspclient.ForceSync: file too large to sync (%.1f MB, limit 10 MB)",
+			float64(fi.Size())/(1<<20))
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("lspclient.ForceSync: read %s: %w", filePath, err)
+	}
+
+	uri := string(protocol.URIFromPath(filePath))
+	uriLock := c.syncer.lockForURI(uri)
+	uriLock.Lock()
+	defer uriLock.Unlock()
+
+	c.syncer.mu.Lock()
+	st := c.syncer.files[uri]
+	c.syncer.mu.Unlock()
+
+	if st == nil {
+		if err := c.sendDidOpen(ctx, uri, languageID, content); err != nil {
+			return err
+		}
+	} else {
+		if err := c.sendDidChange(ctx, uri, content, st); err != nil {
+			return err
+		}
+	}
+
+	// Update fingerprint.
+	c.syncer.mu.Lock()
+	if s := c.syncer.files[uri]; s != nil {
+		s.mtime = fi.ModTime()
+		s.size = fi.Size()
+	}
+	c.syncer.mu.Unlock()
+
+	return nil
+}
+
 // staleByFingerprint reports whether st's mtime/size differs from fi.
 func staleByFingerprint(st *openState, fi os.FileInfo) bool {
 	return st.mtime != fi.ModTime() || st.size != fi.Size()

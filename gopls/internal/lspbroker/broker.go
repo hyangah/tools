@@ -26,6 +26,14 @@ type sessionKey struct {
 	serverID string // e.g. "go", "typescript", or "override" (tests)
 }
 
+// configEntry caches a loaded .lsp.json config together with the file's
+// modification time so that sessionForFile can detect when the config
+// changes on disk and invalidate stale sessions.
+type configEntry struct {
+	cfg   *Config
+	mtime time.Time // zero when .lsp.json is absent
+}
+
 // Broker is the top-level daemon object. It listens on a unix domain
 // socket under [CacheRoot], accepts incoming broker-protocol connections
 // from lspcli, and dispatches requests to per-workspace [Session]
@@ -61,12 +69,17 @@ type Broker struct {
 	// shutting itself down. Zero means no idle timeout.
 	IdleTimeout time.Duration
 
-	// mu protects sessions, stopped, idle, and listener.
-	mu       sync.Mutex
-	sessions map[sessionKey]Session
-	stopped  bool
-	idle     *idleTracker // nil if IdleTimeout == 0
-	listener net.Listener // set by Serve, closed by Stop
+	// Diags collects publishDiagnostics notifications from all active
+	// LSP sessions. Created by NewBroker.
+	Diags *DiagStore
+
+	// mu protects sessions, configCache, stopped, idle, and listener.
+	mu          sync.Mutex
+	sessions    map[sessionKey]Session
+	configCache map[string]configEntry // keyed by project root
+	stopped     bool
+	idle        *idleTracker // nil if IdleTimeout == 0
+	listener    net.Listener // set by Serve, closed by Stop
 
 	// cancel shuts down the Serve loop when called.
 	cancel context.CancelFunc
@@ -84,6 +97,8 @@ func NewBroker(goplsPath, goplsVersion string) *Broker {
 		goplsPath:    goplsPath,
 		goplsVersion: goplsVersion,
 		sessions:     make(map[sessionKey]Session),
+		configCache:  make(map[string]configEntry),
+		Diags:        NewDiagStore(),
 	}
 }
 
@@ -248,6 +263,10 @@ func (b *Broker) dispatch(ctx context.Context, reply jsonrpc2.Replier, req jsonr
 	case DocumentSymbolMethod, WorkspaceSymbolMethod,
 		IncomingCallsMethod, OutgoingCallsMethod:
 		return b.handlePassthrough(ctx, reply, req)
+	case DiagnosticsMethod:
+		return b.handleDiagnostics(ctx, reply, req)
+	case SyncMethod:
+		return b.handleSync(ctx, reply, req)
 	default:
 		return reply(ctx, nil, fmt.Errorf("%w: %q", jsonrpc2.ErrMethodNotFound, req.Method()))
 	}
@@ -358,6 +377,72 @@ func (b *Broker) handlePassthrough(ctx context.Context, reply jsonrpc2.Replier, 
 		return reply(ctx, nil, err)
 	}
 	return reply(ctx, json.RawMessage(result), nil)
+}
+
+// handleDiagnostics handles the lsp.diagnostics request.
+// It returns diagnostics for a specific file or for the whole project.
+func (b *Broker) handleDiagnostics(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
+	var params DiagnosticsParams
+	if err := json.Unmarshal(req.Params(), &params); err != nil {
+		return reply(ctx, nil, fmt.Errorf("%w: %v", jsonrpc2.ErrInvalidParams, err))
+	}
+	if params.File == "" && !params.Project {
+		return reply(ctx, nil, fmt.Errorf("%w: either file or project=true is required", jsonrpc2.ErrInvalidParams))
+	}
+
+	if params.File != "" {
+		uri := string(protocol.URIFromPath(params.File))
+		diags := b.Diags.ForFile(uri)
+		if diags == nil {
+			diags = []protocol.Diagnostic{}
+		}
+		raw, err := json.Marshal(diags)
+		if err != nil {
+			return reply(ctx, nil, err)
+		}
+		return reply(ctx, json.RawMessage(raw), nil)
+	}
+
+	// Project-wide diagnostics.
+	all := b.Diags.ForProject()
+	if all == nil {
+		all = map[string][]protocol.Diagnostic{}
+	}
+	raw, err := json.Marshal(all)
+	if err != nil {
+		return reply(ctx, nil, err)
+	}
+	return reply(ctx, json.RawMessage(raw), nil)
+}
+
+// handleSync handles the lsp.sync request. It finds the session for
+// the given file, forces a re-sync, and clears stale diagnostics.
+func (b *Broker) handleSync(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
+	var params SyncParams
+	if err := json.Unmarshal(req.Params(), &params); err != nil {
+		return reply(ctx, nil, fmt.Errorf("%w: %v", jsonrpc2.ErrInvalidParams, err))
+	}
+	if params.File == "" {
+		return reply(ctx, nil, fmt.Errorf("%w: file is required", jsonrpc2.ErrInvalidParams))
+	}
+	if !filepath.IsAbs(params.File) {
+		return reply(ctx, nil, fmt.Errorf("%w: file must be an absolute path", jsonrpc2.ErrInvalidParams))
+	}
+
+	sess, err := b.sessionForFile(ctx, params.File)
+	if err != nil {
+		return reply(ctx, nil, err)
+	}
+
+	// Clear stale diagnostics before re-syncing.
+	uri := string(protocol.URIFromPath(params.File))
+	b.Diags.Clear(uri)
+
+	if err := sess.Sync(ctx, params.File); err != nil {
+		return reply(ctx, nil, fmt.Errorf("sync %s: %w", params.File, err))
+	}
+
+	return reply(ctx, nil, nil)
 }
 
 // resolveNamedPosition resolves a Form A (name-based) request to a Form B
@@ -472,7 +557,7 @@ func (b *Broker) sessionForFile(ctx context.Context, file string) (Session, erro
 
 	ext := filepath.Ext(file)
 
-	cfg, err := LoadConfig(root)
+	cfg, err := b.loadConfigCached(ctx, root)
 	if err != nil {
 		return nil, fmt.Errorf("broker: load config for %s: %w", root, err)
 	}
@@ -518,12 +603,83 @@ func (b *Broker) sessionForFile(ctx context.Context, file string) (Session, erro
 		serverID, serverCfg := cfg.ServerForExtension(ext)
 		if serverCfg != nil {
 			return b.getOrCreateSession(ctx, root, serverID, func() Session {
-				return NewGenericSession(root, serverCfg)
+				return NewGenericSession(root, serverCfg, b.Diags, serverID)
 			})
 		}
 	}
 
 	return nil, ErrNoServer
+}
+
+// loadConfigCached returns the parsed .lsp.json for root, using a
+// cached result when the file's mtime has not changed. If the mtime has
+// changed (or this is the first call for root), stale sessions are
+// evicted before the config is reloaded so that subsequent requests get
+// a fresh session configured from the new file.
+//
+// Callers must NOT hold b.mu.
+func (b *Broker) loadConfigCached(ctx context.Context, root string) (*Config, error) {
+	cfgPath := filepath.Join(root, ".lsp.json")
+	info, statErr := os.Stat(cfgPath)
+
+	var mtime time.Time
+	if statErr == nil {
+		mtime = info.ModTime()
+	}
+
+	b.mu.Lock()
+	entry, cached := b.configCache[root]
+	b.mu.Unlock()
+
+	// Fast path: config is cached and the file hasn't changed.
+	if cached && entry.mtime.Equal(mtime) {
+		return entry.cfg, nil
+	}
+
+	// Slow path: first load or mtime changed — evict stale sessions.
+	if cached {
+		b.mu.Lock()
+		var toClose []Session
+		for key, sess := range b.sessions {
+			if key.root == root {
+				toClose = append(toClose, sess)
+				delete(b.sessions, key)
+			}
+		}
+		b.mu.Unlock()
+		// Close sessions without holding the lock; in-flight requests on
+		// the old sessions complete normally (they hold their own reference).
+		for _, sess := range toClose {
+			if err := sess.Close(); err != nil {
+				event.Error(ctx, "broker: evict session on config reload", err)
+			}
+		}
+	}
+
+	// Reload (or clear) the config.
+	var cfg *Config
+	if statErr == nil {
+		var err error
+		cfg, err = LoadConfig(root)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	b.mu.Lock()
+	b.configCache[root] = configEntry{cfg: cfg, mtime: mtime}
+	b.mu.Unlock()
+
+	return cfg, nil
+}
+
+// diagWirable is the interface that GoSession satisfies to receive the
+// broker's DiagStore. Using an interface avoids importing goadapter from
+// the broker package (which would create an import cycle).
+type diagWirable interface {
+	SetDiagStore(ds interface {
+		Update(uri string, version int32, serverID string, diags []protocol.Diagnostic)
+	}, serverID string)
 }
 
 // getOrCreateSession returns an existing session for the given key, or
@@ -539,6 +695,10 @@ func (b *Broker) getOrCreateSession(ctx context.Context, root, serverID string, 
 		return s, nil
 	}
 	s := create()
+	// Wire diagnostics store into sessions that support it (GoSession).
+	if w, ok := s.(diagWirable); ok {
+		w.SetDiagStore(b.Diags, serverID)
+	}
 	b.sessions[key] = s
 	event.Log(ctx, fmt.Sprintf("broker: new session root=%s server=%s", root, serverID))
 	return s, nil
