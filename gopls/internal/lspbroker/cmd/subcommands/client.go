@@ -6,6 +6,7 @@ package subcommands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -64,11 +65,63 @@ func (bc *BrokerConn) Stop(ctx context.Context) error {
 }
 
 // Definition sends an lsp.definition request to the broker daemon.
-// The params use the discriminated shape per ADR-007/008.
 func (bc *BrokerConn) Definition(ctx context.Context, params lspbroker.DefinitionParams) ([]lspbroker.Location, error) {
 	var locs []lspbroker.Location
 	if _, err := bc.conn.Call(ctx, lspbroker.DefinitionMethod, params, &locs); err != nil {
 		return nil, fmt.Errorf("lsp.definition: %w", err)
 	}
 	return locs, nil
+}
+
+// References sends an lsp.references request.
+func (bc *BrokerConn) References(ctx context.Context, params lspbroker.DefinitionParams) ([]lspbroker.Location, error) {
+	var locs []lspbroker.Location
+	if _, err := bc.conn.Call(ctx, lspbroker.ReferencesMethod, params, &locs); err != nil {
+		return nil, fmt.Errorf("lsp.references: %w", err)
+	}
+	return locs, nil
+}
+
+// Hover sends an lsp.hover request and returns the raw JSON response.
+func (bc *BrokerConn) Hover(ctx context.Context, params lspbroker.DefinitionParams) (json.RawMessage, error) {
+	var result json.RawMessage
+	if _, err := bc.conn.Call(ctx, lspbroker.HoverMethod, params, &result); err != nil {
+		return nil, fmt.Errorf("lsp.hover: %w", err)
+	}
+	return result, nil
+}
+
+// Implementation sends an lsp.implementation request.
+func (bc *BrokerConn) Implementation(ctx context.Context, params lspbroker.DefinitionParams) ([]lspbroker.Location, error) {
+	var locs []lspbroker.Location
+	if _, err := bc.conn.Call(ctx, lspbroker.ImplementationMethod, params, &locs); err != nil {
+		return nil, fmt.Errorf("lsp.implementation: %w", err)
+	}
+	return locs, nil
+}
+
+// DocumentSymbol sends an lsp.documentSymbol request.
+func (bc *BrokerConn) DocumentSymbol(ctx context.Context, file string) (json.RawMessage, error) {
+	params := lspbroker.DocumentSymbolParams{
+		Version: lspbroker.ProtocolVersion,
+		File:    file,
+	}
+	var result json.RawMessage
+	if _, err := bc.conn.Call(ctx, lspbroker.DocumentSymbolMethod, params, &result); err != nil {
+		return nil, fmt.Errorf("lsp.documentSymbol: %w", err)
+	}
+	return result, nil
+}
+
+// WorkspaceSymbol sends an lsp.workspaceSymbol request.
+func (bc *BrokerConn) WorkspaceSymbol(ctx context.Context, query string) (json.RawMessage, error) {
+	params := lspbroker.WorkspaceSymbolParams{
+		Version: lspbroker.ProtocolVersion,
+		Query:   query,
+	}
+	var result json.RawMessage
+	if _, err := bc.conn.Call(ctx, lspbroker.WorkspaceSymbolMethod, params, &result); err != nil {
+		return nil, fmt.Errorf("lsp.workspaceSymbol: %w", err)
+	}
+	return result, nil
 }

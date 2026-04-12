@@ -224,20 +224,21 @@ func (b *Broker) dispatch(ctx context.Context, reply jsonrpc2.Replier, req jsonr
 		}
 		go b.Stop(context.Background())
 		return nil
-	case DefinitionMethod:
-		return b.handleDefinition(ctx, reply, req)
+	case DefinitionMethod, ReferencesMethod, HoverMethod, ImplementationMethod,
+		PrepareCallHierarchyMethod:
+		return b.handlePositionalOp(ctx, reply, req)
+	case DocumentSymbolMethod, WorkspaceSymbolMethod,
+		IncomingCallsMethod, OutgoingCallsMethod:
+		return b.handlePassthrough(ctx, reply, req)
 	default:
 		return reply(ctx, nil, fmt.Errorf("%w: %q", jsonrpc2.ErrMethodNotFound, req.Method()))
 	}
 }
 
-// handleDefinition handles an lsp.definition request. It supports two
-// forms per ADR-007/008:
-//
-//   - Form A (name-based): Symbol is set, Character is nil. The broker
-//     resolves the symbol to a position via documentSymbol, then dispatches.
-//   - Form B (positional): Character is set, Symbol is empty. Direct dispatch.
-func (b *Broker) handleDefinition(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
+// handlePositionalOp handles any position-taking operation (def, refs, hover,
+// impl, prepareCallHierarchy). All use the same discriminated parameter shape
+// per ADR-007/008: Form A (name-based) or Form B (positional bypass).
+func (b *Broker) handlePositionalOp(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
 	var params DefinitionParams
 	if err := json.Unmarshal(req.Params(), &params); err != nil {
 		return reply(ctx, nil, fmt.Errorf("%w: %v", jsonrpc2.ErrInvalidParams, err))
@@ -248,11 +249,9 @@ func (b *Broker) handleDefinition(ctx context.Context, reply jsonrpc2.Replier, r
 	if !filepath.IsAbs(params.File) {
 		return reply(ctx, nil, fmt.Errorf("%w: file must be an absolute path", jsonrpc2.ErrInvalidParams))
 	}
-	// Reject: both symbol and character present.
 	if params.Symbol != "" && params.Character != nil {
 		return reply(ctx, nil, fmt.Errorf("%w: symbol and character are mutually exclusive", jsonrpc2.ErrInvalidParams))
 	}
-	// Reject: neither symbol nor character present.
 	if params.Symbol == "" && params.Character == nil {
 		return reply(ctx, nil, fmt.Errorf("%w: either symbol or character (via file:line:col) is required", jsonrpc2.ErrInvalidParams))
 	}
@@ -271,12 +270,56 @@ func (b *Broker) handleDefinition(ctx context.Context, reply jsonrpc2.Replier, r
 		params = resolved
 	}
 
-	// Dispatch the positional request.
+	// Dispatch the positional request using the original method name.
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return reply(ctx, nil, err)
 	}
-	result, err := sess.Handle(ctx, DefinitionMethod, raw)
+	result, err := sess.Handle(ctx, req.Method(), raw)
+	if err != nil {
+		return reply(ctx, nil, err)
+	}
+	return reply(ctx, json.RawMessage(result), nil)
+}
+
+// handlePassthrough forwards the request directly to the session without
+// position resolution. Used for non-position-taking operations like
+// documentSymbol, workspaceSymbol, incomingCalls, outgoingCalls.
+func (b *Broker) handlePassthrough(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
+	// Extract file from params for session routing. Different methods
+	// carry the file in different places.
+	var base struct {
+		File string `json:"file"`
+	}
+	if err := json.Unmarshal(req.Params(), &base); err != nil {
+		return reply(ctx, nil, fmt.Errorf("%w: %v", jsonrpc2.ErrInvalidParams, err))
+	}
+
+	// For workspace/symbol and call hierarchy, the file might be empty.
+	// Use cwd as a fallback for session routing.
+	file := base.File
+	if file == "" {
+		// Try to extract from nested item for call hierarchy.
+		var itemParams struct {
+			Item struct {
+				URI string `json:"uri"`
+			} `json:"item"`
+		}
+		if err := json.Unmarshal(req.Params(), &itemParams); err == nil && itemParams.Item.URI != "" {
+			file = itemParams.Item.URI
+		}
+	}
+
+	if file == "" {
+		return reply(ctx, nil, fmt.Errorf("%w: cannot determine session (no file)", jsonrpc2.ErrInvalidParams))
+	}
+
+	sess, err := b.sessionForFile(ctx, file)
+	if err != nil {
+		return reply(ctx, nil, err)
+	}
+
+	result, err := sess.Handle(ctx, req.Method(), req.Params())
 	if err != nil {
 		return reply(ctx, nil, err)
 	}

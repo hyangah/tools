@@ -6,6 +6,7 @@ package lspbroker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -125,10 +126,17 @@ const StopMethod = "broker.stop"
 // DefinitionMethod is the JSON-RPC method name for the lsp.definition request.
 const DefinitionMethod = "lsp.definition"
 
-// DocumentSymbolMethod is the JSON-RPC method name for the
-// lsp.documentSymbol request, used by the broker's name-resolution
-// dispatch to resolve symbol names to positions.
-const DocumentSymbolMethod = "lsp.documentSymbol"
+// Broker protocol method names for LSP operations.
+const (
+	DocumentSymbolMethod       = "lsp.documentSymbol"
+	ReferencesMethod           = "lsp.references"
+	HoverMethod                = "lsp.hover"
+	ImplementationMethod       = "lsp.implementation"
+	WorkspaceSymbolMethod      = "lsp.workspaceSymbol"
+	PrepareCallHierarchyMethod = "lsp.prepareCallHierarchy"
+	IncomingCallsMethod        = "lsp.incomingCalls"
+	OutgoingCallsMethod        = "lsp.outgoingCalls"
+)
 
 // DefinitionParams are the parameters for an [lsp.definition] request.
 //
@@ -169,6 +177,18 @@ func IntPtr(n int) *int { return &n }
 type DocumentSymbolParams struct {
 	Version int    `json:"version"`
 	File    string `json:"file"`
+}
+
+// WorkspaceSymbolParams are the parameters for an [lsp.workspaceSymbol] request.
+type WorkspaceSymbolParams struct {
+	Version int    `json:"version"`
+	Query   string `json:"query"`
+}
+
+// CallHierarchyItemParams wraps a call hierarchy item for incoming/outgoing calls.
+type CallHierarchyItemParams struct {
+	Version int             `json:"version"`
+	Item    json.RawMessage `json:"item"` // protocol.CallHierarchyItem
 }
 
 // Position is a 0-based line/character offset, matching LSP's Position

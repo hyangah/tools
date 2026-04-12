@@ -49,8 +49,22 @@ func (s *GoSession) Handle(ctx context.Context, method string, params []byte) ([
 	switch method {
 	case lspbroker.DefinitionMethod:
 		return s.handleDefinition(ctx, params)
+	case lspbroker.ReferencesMethod:
+		return s.handleReferences(ctx, params)
+	case lspbroker.HoverMethod:
+		return s.handleHover(ctx, params)
+	case lspbroker.ImplementationMethod:
+		return s.handleImplementation(ctx, params)
 	case lspbroker.DocumentSymbolMethod:
 		return s.handleDocumentSymbol(ctx, params)
+	case lspbroker.WorkspaceSymbolMethod:
+		return s.handleWorkspaceSymbol(ctx, params)
+	case lspbroker.PrepareCallHierarchyMethod:
+		return s.handlePrepareCallHierarchy(ctx, params)
+	case lspbroker.IncomingCallsMethod:
+		return s.handleIncomingCalls(ctx, params)
+	case lspbroker.OutgoingCallsMethod:
+		return s.handleOutgoingCalls(ctx, params)
 	default:
 		return nil, fmt.Errorf("goadapter: method not implemented: %q", method)
 	}
@@ -141,6 +155,82 @@ func (s *GoSession) handleDefinition(ctx context.Context, rawParams []byte) ([]b
 	return json.Marshal(convertLocations(locs))
 }
 
+func (s *GoSession) handleReferences(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req lspbroker.DefinitionParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal params: %w", err)
+	}
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.EnsureOpen(ctx, req.File, "go"); err != nil {
+		return nil, err
+	}
+	uri := string(protocol.URIFromPath(req.File))
+	char := 0
+	if req.Character != nil {
+		char = *req.Character - 1
+	}
+	locs, err := callWithRetry(ctx, func() ([]protocol.Location, error) {
+		return c.References(ctx, uri, uint32(req.Line-1), uint32(char), true)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: references: %w", err)
+	}
+	return json.Marshal(convertLocations(locs))
+}
+
+func (s *GoSession) handleHover(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req lspbroker.DefinitionParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal params: %w", err)
+	}
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.EnsureOpen(ctx, req.File, "go"); err != nil {
+		return nil, err
+	}
+	uri := string(protocol.URIFromPath(req.File))
+	char := 0
+	if req.Character != nil {
+		char = *req.Character - 1
+	}
+	hover, err := c.Hover(ctx, uri, uint32(req.Line-1), uint32(char))
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: hover: %w", err)
+	}
+	return json.Marshal(hover)
+}
+
+func (s *GoSession) handleImplementation(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req lspbroker.DefinitionParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal params: %w", err)
+	}
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.EnsureOpen(ctx, req.File, "go"); err != nil {
+		return nil, err
+	}
+	uri := string(protocol.URIFromPath(req.File))
+	char := 0
+	if req.Character != nil {
+		char = *req.Character - 1
+	}
+	locs, err := callWithRetry(ctx, func() ([]protocol.Location, error) {
+		return c.Implementation(ctx, uri, uint32(req.Line-1), uint32(char))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: implementation: %w", err)
+	}
+	return json.Marshal(convertLocations(locs))
+}
+
 func (s *GoSession) handleDocumentSymbol(ctx context.Context, rawParams []byte) ([]byte, error) {
 	var req lspbroker.DocumentSymbolParams
 	if err := json.Unmarshal(rawParams, &req); err != nil {
@@ -165,6 +255,86 @@ func (s *GoSession) handleDocumentSymbol(ctx context.Context, rawParams []byte) 
 		return nil, fmt.Errorf("goadapter: documentSymbol: %w", err)
 	}
 	return json.Marshal(symbols)
+}
+
+func (s *GoSession) handleWorkspaceSymbol(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req lspbroker.WorkspaceSymbolParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal params: %w", err)
+	}
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	symbols, err := c.WorkspaceSymbol(ctx, req.Query)
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: workspaceSymbol: %w", err)
+	}
+	return json.Marshal(symbols)
+}
+
+func (s *GoSession) handlePrepareCallHierarchy(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req lspbroker.DefinitionParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal params: %w", err)
+	}
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.EnsureOpen(ctx, req.File, "go"); err != nil {
+		return nil, err
+	}
+	uri := string(protocol.URIFromPath(req.File))
+	char := 0
+	if req.Character != nil {
+		char = *req.Character - 1
+	}
+	items, err := c.PrepareCallHierarchy(ctx, uri, uint32(req.Line-1), uint32(char))
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: prepareCallHierarchy: %w", err)
+	}
+	return json.Marshal(items)
+}
+
+func (s *GoSession) handleIncomingCalls(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req lspbroker.CallHierarchyItemParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal params: %w", err)
+	}
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var item protocol.CallHierarchyItem
+	if err := json.Unmarshal(req.Item, &item); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal CallHierarchyItem: %w", err)
+	}
+	calls, err := c.IncomingCalls(ctx, item)
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: incomingCalls: %w", err)
+	}
+	return json.Marshal(calls)
+}
+
+func (s *GoSession) handleOutgoingCalls(ctx context.Context, rawParams []byte) ([]byte, error) {
+	var req lspbroker.CallHierarchyItemParams
+	if err := json.Unmarshal(rawParams, &req); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal params: %w", err)
+	}
+	c, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var item protocol.CallHierarchyItem
+	if err := json.Unmarshal(req.Item, &item); err != nil {
+		return nil, fmt.Errorf("goadapter: unmarshal CallHierarchyItem: %w", err)
+	}
+	calls, err := c.OutgoingCalls(ctx, item)
+	if err != nil {
+		return nil, fmt.Errorf("goadapter: outgoingCalls: %w", err)
+	}
+	return json.Marshal(calls)
 }
 
 // callWithRetry retries an LSP call on ContentModified (-32801) with
