@@ -204,13 +204,12 @@ func RunLSPCLI(ctx context.Context, args ...string) error {
 // invoked by the tool.Application wrapper's DetailedHelp method in
 // gopls/internal/cmd/lspbroker.go.
 func PrintLSPCLIHelp(w io.Writer) {
-	fmt.Fprint(w, `
-lspcli is the agent-facing CLI for the LSP broker. Agents invoke
-subcommands like "gopls lspcli def FILE LINE COL" via their shell
-tool and receive pre-formatted results.
+	fmt.Fprint(w, `lspcli is the agent-facing CLI for the LSP broker. It communicates with
+a background daemon (lspbrokerd) that manages LSP server sessions.
 
-The CLI auto-spawns "gopls lspbrokerd --detach" on first use and
-communicates with it over a unix domain socket.
+The CLI auto-spawns "gopls lspbrokerd --detach" on first use. The
+daemon manages connections to language servers (gopls for Go, or any
+LSP server configured in .lsp.json for other languages).
 
 Global flags (before subcommand):
   --json        output results as JSON
@@ -218,10 +217,39 @@ Global flags (before subcommand):
   --timeout=DUR wall-clock timeout (default 30s)
   -v            verbose: print raw broker responses
 
-Subcommands (Phase 1):
-  def FILE LINE COL   go to definition
+Subcommands:
 
+  Code navigation:
+    def SYMBOL --in FILE       go to definition
+    refs SYMBOL --in FILE      find all references
+    hover SYMBOL --in FILE     show type/documentation
+    impl SYMBOL --in FILE      find implementations
+    prep-calls SYMBOL --in FILE  call hierarchy (prepare)
+    symbols FILE               list symbols in a file
+    wsymbols QUERY             search workspace symbols
+
+  Editing:
+    rename SYMBOL --in FILE --to NEWNAME  rename across files (--dry-run to preview)
+
+  Diagnostics & sync:
+    diagnostics FILE           show compiler/linter diagnostics
+    sync FILE                  force file re-sync with the LSP server
+
+  Daemon management:
+    daemon start               start the daemon (usually auto-spawned)
+    daemon status              show daemon status
+    daemon stop                stop the daemon
+    daemon restart             restart the daemon
+
+  Trust:
+    trust add DIR              add a project root to the trust list
+    trust list                 list trusted roots
+    trust remove DIR           remove a trusted root
+
+All positional subcommands accept either name-based (SYMBOL --in FILE)
+or positional (FILE LINE COL) input. Use --json for machine-readable output.
 `)
+
 }
 
 // exitError is returned from RunLSPCLI when the CLI should exit with a

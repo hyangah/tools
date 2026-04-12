@@ -198,7 +198,9 @@ type Position struct {
 	// Line is the 0-based line number.
 	Line int `json:"line"`
 
-	// Character is the 0-based UTF-16 character offset.
+	// Character is the 0-based character offset in the server's
+	// negotiated position encoding (UTF-8 when supported, UTF-16
+	// otherwise). See ADR-006 for the encoding negotiation.
 	Character int `json:"character"`
 }
 
