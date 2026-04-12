@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,67 @@ func (e emptySessions) Session(string) (*cache.Session, protocol.Server) {
 
 // SetSessionExitFunc implements mcp.Sessions.
 func (e emptySessions) SetSessionExitFunc(func(string)) {
+}
+
+// TestToolsDocumented verifies that all MCP tools defined in code are
+// documented in gopls/doc/features/mcp.md by extracting tool names
+// directly from mcp.go source.
+func TestToolsDocumented(t *testing.T) {
+	// Read mcp.go source to extract tool names from case statements
+	mcpSrc, err := os.ReadFile("gopls/internal/mcp/mcp.go")
+	if err != nil {
+		t.Fatalf("could not read mcp.go: %v", err)
+	}
+
+	// Extract tool names from case statements in addToolByName function
+	// Look for: case "go_<name>":
+	content := string(mcpSrc)
+
+	// Find all case statements in addToolByName
+	// Pattern: case "go_<name>":
+	start := strings.Index(content, "func addToolByName")
+	if start == -1 {
+		t.Fatalf("addToolByName function not found")
+	}
+	end := strings.Index(content[start:], "\n}\n")
+	if end == -1 {
+		t.Fatalf("addToolByName function end not found")
+	}
+	funcBody := content[start : start+end+3]
+
+	var tools []string
+	lines := strings.Split(funcBody, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "case \"go_") && strings.HasSuffix(trimmed, "\":") {
+			toolName := strings.TrimPrefix(strings.TrimSuffix(trimmed, "\":"), "case \"")
+			tools = append(tools, toolName)
+		}
+	}
+
+	if len(tools) == 0 {
+		t.Fatalf("no tools found in addToolByName")
+	}
+
+	// Read the documentation file
+	docPath := "gopls/doc/features/mcp.md"
+	docContent, err := os.ReadFile(docPath)
+	if err != nil {
+		t.Fatalf("could not read %s: %v", docPath, err)
+	}
+	docStr := string(docContent)
+
+	// Verify markers are present
+	if !strings.Contains(docStr, "<!-- BEGIN_MCP_TOOLS -->") || !strings.Contains(docStr, "<!-- END_MCP_TOOLS -->") {
+		t.Errorf("MCP tools markers not found in documentation")
+	}
+
+	// Check that all tools from code are documented
+	for _, tool := range tools {
+		if !strings.Contains(docStr, "**"+tool+"**") {
+			t.Errorf("tool %q not documented in mcp.md", tool)
+		}
+	}
 }
 
 func TestContextCancellation(t *testing.T) {
