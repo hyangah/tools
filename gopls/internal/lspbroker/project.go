@@ -33,7 +33,9 @@ func resetProjectRootCache() {
 //  5. .hg/ (directory)
 //
 // Walking stops at $HOME — never walk beyond the user's home directory.
-// Returns ("", ErrProjectNotFound) if no sentinel is found.
+// If no sentinel is found, FindProjectRoot falls back to returning the
+// directory containing filePath. This matches gopls's behavior for
+// standalone "ad-hoc" files that live outside any module or repository.
 //
 // Results are cached per absolute directory path in a package-level sync.Map.
 func FindProjectRoot(filePath string) (string, error) {
@@ -43,7 +45,7 @@ func FindProjectRoot(filePath string) (string, error) {
 	if v, ok := projectRootCache.Load(dir); ok {
 		root := v.(string)
 		if root == "" {
-			return "", ErrProjectNotFound
+			return dir, nil
 		}
 		return root, nil
 	}
@@ -55,7 +57,7 @@ func FindProjectRoot(filePath string) (string, error) {
 	projectRootCache.Store(dir, root)
 
 	if root == "" {
-		return "", ErrProjectNotFound
+		root = dir
 	}
 	return root, nil
 }

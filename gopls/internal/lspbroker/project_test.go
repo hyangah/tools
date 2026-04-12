@@ -134,10 +134,10 @@ func TestFindProjectRoot_LspJsonPriority(t *testing.T) {
 	}
 }
 
-func TestFindProjectRoot_NotFound(t *testing.T) {
+func TestFindProjectRoot_StandaloneFallback(t *testing.T) {
 	resetProjectRootCache()
-	// Use a directory under $HOME that has no sentinels. We create a deep
-	// temp dir and ensure no sentinels exist in it.
+	// When no sentinel is found, FindProjectRoot should fall back to the
+	// directory containing the file (ad-hoc / standalone file behavior).
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip("cannot determine home dir")
@@ -158,9 +158,12 @@ func TestFindProjectRoot_NotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = FindProjectRoot(filePath)
-	if err != ErrProjectNotFound {
-		t.Errorf("FindProjectRoot = %v, want ErrProjectNotFound", err)
+	got, err := FindProjectRoot(filePath)
+	if err != nil {
+		t.Fatalf("FindProjectRoot: unexpected error: %v", err)
+	}
+	if got != subDir {
+		t.Errorf("FindProjectRoot = %q, want %q (file's directory)", got, subDir)
 	}
 }
 
