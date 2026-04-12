@@ -15,6 +15,7 @@ package cmd
 import (
 	"context"
 	"flag"
+	"time"
 
 	brokercmd "golang.org/x/tools/gopls/internal/lspbroker/cmd"
 )
@@ -23,6 +24,11 @@ import (
 // agent-facing CLI for the LSP broker.
 type lspcli struct {
 	app *Application
+
+	JSON    bool          `flag:"json" help:"output results as JSON"`
+	NoSpawn bool          `flag:"no-spawn" help:"fail if broker daemon is not already running"`
+	Timeout time.Duration `flag:"timeout" help:"wall-clock timeout (default 30s)"`
+	Verbose bool          `flag:"v" help:"verbose: print raw broker responses"`
 }
 
 func (c *lspcli) Name() string      { return "lspcli" }
@@ -36,7 +42,13 @@ func (c *lspcli) DetailedHelp(f *flag.FlagSet) {
 }
 
 func (c *lspcli) Run(ctx context.Context, args ...string) error {
-	return brokercmd.RunLSPCLI(ctx, args...)
+	gf := brokercmd.GlobalFlags{
+		JSON:    c.JSON,
+		NoSpawn: c.NoSpawn,
+		Timeout: c.Timeout,
+		Verbose: c.Verbose,
+	}
+	return brokercmd.RunLSPCLI(ctx, gf, args...)
 }
 
 // lspbrokerd implements the `gopls lspbrokerd` subcommand — the

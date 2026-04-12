@@ -7,7 +7,6 @@ package cmd
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -18,9 +17,11 @@ import (
 	"golang.org/x/tools/internal/tool"
 )
 
-// globalFlags holds the flags that precede the subcommand name and
-// apply to all lspcli invocations.
-type globalFlags struct {
+// GlobalFlags holds the flags that precede the subcommand name and
+// apply to all lspcli invocations. The fields are populated by the
+// gopls tool framework from struct tags on the lspcli command type
+// in gopls/internal/cmd/lspbroker.go.
+type GlobalFlags struct {
 	JSON    bool
 	NoSpawn bool
 	Timeout time.Duration
@@ -28,24 +29,17 @@ type globalFlags struct {
 }
 
 // RunLSPCLI is the entry point for `gopls lspcli <subcommand> ...`.
-// It parses the first positional argument as a subcommand name and
-// dispatches to the implementation for that subcommand.
-func RunLSPCLI(ctx context.Context, args ...string) error {
-	fs := flag.NewFlagSet("lspcli", flag.ContinueOnError)
-	var gf globalFlags
-	fs.BoolVar(&gf.JSON, "json", false, "output results as JSON")
-	fs.BoolVar(&gf.NoSpawn, "no-spawn", false, "fail if broker daemon is not already running")
-	fs.DurationVar(&gf.Timeout, "timeout", 30*time.Second, "wall-clock timeout for the invocation")
-	fs.BoolVar(&gf.Verbose, "v", false, "verbose: print raw broker responses")
-
-	if err := fs.Parse(args); err != nil {
-		return tool.CommandLineErrorf("lspcli: %v", err)
+// Global flags are parsed by the gopls tool framework and passed via gf.
+// This function parses the first positional argument as a subcommand
+// name and dispatches to the implementation for that subcommand.
+func RunLSPCLI(ctx context.Context, gf GlobalFlags, args ...string) error {
+	if gf.Timeout == 0 {
+		gf.Timeout = 30 * time.Second
 	}
-	rest := fs.Args()
-	if len(rest) == 0 {
+	if len(args) == 0 {
 		return tool.CommandLineErrorf("lspcli: must provide subcommand")
 	}
-	sub, subArgs := rest[0], rest[1:]
+	sub, subArgs := args[0], args[1:]
 
 	// Resolve runtime values needed by subcommands.
 	cacheDir := lspbroker.CacheRoot()
