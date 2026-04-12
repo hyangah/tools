@@ -180,6 +180,21 @@ func RunLSPCLI(ctx context.Context, args ...string) error {
 		}
 		return nil
 
+	case "rename":
+		flags := subcommands.RenameFlags{
+			JSON:    gf.JSON,
+			NoSpawn: gf.NoSpawn,
+			Timeout: gf.Timeout,
+		}
+		exitCode, runErr := subcommands.RunRename(ctx, subArgs, flags, cacheDir, selfPath, os.Stdout)
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+		}
+		if exitCode != 0 {
+			return &exitError{code: exitCode}
+		}
+		return nil
+
 	default:
 		return tool.CommandLineErrorf("lspcli: unknown subcommand %q", sub)
 	}

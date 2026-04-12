@@ -154,3 +154,14 @@ func (bc *BrokerConn) Sync(ctx context.Context, params lspbroker.SyncParams) err
 	}
 	return nil
 }
+
+// Rename sends an lsp.rename request to the broker daemon and returns the
+// [lspbroker.RenameResult] describing the changes that were (or would be)
+// applied.
+func (bc *BrokerConn) Rename(ctx context.Context, params lspbroker.RenameParams) (*lspbroker.RenameResult, error) {
+	var result lspbroker.RenameResult
+	if _, err := bc.conn.Call(ctx, lspbroker.RenameMethod, params, &result); err != nil {
+		return nil, fmt.Errorf("lsp.rename: %w", err)
+	}
+	return &result, nil
+}
