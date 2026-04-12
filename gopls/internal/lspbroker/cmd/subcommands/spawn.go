@@ -33,6 +33,11 @@ func EnsureDaemonRunning(ctx context.Context, cacheDir, selfPath string) error {
 		return nil
 	}
 
+	// Ensure cache directory exists before spawning (cmd.Dir must exist).
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+
 	// Spawn the daemon. "selfPath lspbrokerd --detach" forks a background
 	// process and then blocks for up to 2 s waiting for broker.sock to
 	// appear, so when the command returns the daemon should be ready.
