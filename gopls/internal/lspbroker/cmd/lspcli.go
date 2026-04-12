@@ -145,6 +145,12 @@ func RunLSPCLI(ctx context.Context, args ...string) error {
 		}
 		return nil
 
+	case "trust":
+		if err := subcommands.RunTrust(ctx, subArgs); err != nil {
+			return err
+		}
+		return nil
+
 	default:
 		return tool.CommandLineErrorf("lspcli: unknown subcommand %q", sub)
 	}
