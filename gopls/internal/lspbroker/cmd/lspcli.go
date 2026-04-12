@@ -69,6 +69,72 @@ func RunLSPCLI(ctx context.Context, args ...string) error {
 		}
 		return nil
 
+	case "refs":
+		flags := subcommands.DefFlags{JSON: gf.JSON, NoSpawn: gf.NoSpawn, Timeout: gf.Timeout}
+		exitCode, runErr := subcommands.RunRefs(ctx, subArgs, flags, cacheDir, selfPath, os.Stdout)
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+		}
+		if exitCode != 0 {
+			return &exitError{code: exitCode}
+		}
+		return nil
+
+	case "hover":
+		flags := subcommands.DefFlags{JSON: gf.JSON, NoSpawn: gf.NoSpawn, Timeout: gf.Timeout}
+		exitCode, runErr := subcommands.RunHover(ctx, subArgs, flags, cacheDir, selfPath, os.Stdout)
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+		}
+		if exitCode != 0 {
+			return &exitError{code: exitCode}
+		}
+		return nil
+
+	case "impl":
+		flags := subcommands.DefFlags{JSON: gf.JSON, NoSpawn: gf.NoSpawn, Timeout: gf.Timeout}
+		exitCode, runErr := subcommands.RunImpl(ctx, subArgs, flags, cacheDir, selfPath, os.Stdout)
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+		}
+		if exitCode != 0 {
+			return &exitError{code: exitCode}
+		}
+		return nil
+
+	case "prep-calls":
+		flags := subcommands.DefFlags{JSON: gf.JSON, NoSpawn: gf.NoSpawn, Timeout: gf.Timeout}
+		exitCode, runErr := subcommands.RunPrepCalls(ctx, subArgs, flags, cacheDir, selfPath, os.Stdout)
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+		}
+		if exitCode != 0 {
+			return &exitError{code: exitCode}
+		}
+		return nil
+
+	case "symbols":
+		flags := subcommands.DefFlags{JSON: gf.JSON, NoSpawn: gf.NoSpawn, Timeout: gf.Timeout}
+		exitCode, runErr := subcommands.RunSymbols(ctx, subArgs, flags, cacheDir, selfPath, os.Stdout)
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+		}
+		if exitCode != 0 {
+			return &exitError{code: exitCode}
+		}
+		return nil
+
+	case "wsymbols":
+		flags := subcommands.DefFlags{JSON: gf.JSON, NoSpawn: gf.NoSpawn, Timeout: gf.Timeout}
+		exitCode, runErr := subcommands.RunWsymbols(ctx, subArgs, flags, cacheDir, selfPath, os.Stdout)
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+		}
+		if exitCode != 0 {
+			return &exitError{code: exitCode}
+		}
+		return nil
+
 	case "daemon":
 		exitCode, runErr := subcommands.RunDaemon(ctx, subArgs, cacheDir, selfPath, os.Stdout)
 		if runErr != nil {

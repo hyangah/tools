@@ -125,3 +125,12 @@ func (bc *BrokerConn) WorkspaceSymbol(ctx context.Context, query string) (json.R
 	}
 	return result, nil
 }
+
+// PrepareCallHierarchy sends an lsp.prepareCallHierarchy request and returns the raw JSON response.
+func (bc *BrokerConn) PrepareCallHierarchy(ctx context.Context, params lspbroker.DefinitionParams) (json.RawMessage, error) {
+	var result json.RawMessage
+	if _, err := bc.conn.Call(ctx, lspbroker.PrepareCallHierarchyMethod, params, &result); err != nil {
+		return nil, fmt.Errorf("lsp.prepareCallHierarchy: %w", err)
+	}
+	return result, nil
+}

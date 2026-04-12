@@ -345,6 +345,274 @@ func TestBroker_DefinitionSymbolNotFound(t *testing.T) {
 	}
 }
 
+// TestBroker_ReferencesEndToEnd exercises the lsp.references operation
+// end-to-end. It queries references for the Greeting call at main.go:11:9
+// and expects at least 2 locations: the definition in lib.go and the call
+// in main.go.
+func TestBroker_ReferencesEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH; skipping integration test")
+	}
+
+	fixtureDir := filepath.Join("testdata", "foo")
+	tmpDir := t.TempDir()
+	if err := copyDir(fixtureDir, tmpDir); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	mainGo := filepath.Join(tmpDir, "main.go")
+
+	cacheDir, err := os.MkdirTemp("", "lsp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cacheDir) })
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	factory := func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	}
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test", factory)
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		if err := b.Serve(serveCtx, l); err != nil && serveCtx.Err() == nil {
+			t.Logf("broker.Serve: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancelServe()
+		_ = b.Stop(context.Background())
+		<-serveDone
+	})
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial broker: %v", err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	conn.Go(serveCtx, jsonrpc2.MethodNotFound)
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancelReq := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelReq()
+
+	if _, err := lspbroker.Handshake(ctx, conn, goplsPath, "test"); err != nil {
+		t.Fatalf("broker.handshake: %v", err)
+	}
+
+	// Query references for the Greeting call at main.go:11:9.
+	params := lspbroker.DefinitionParams{
+		Version:   lspbroker.ProtocolVersion,
+		File:      mainGo,
+		Line:      11,
+		Character: lspbroker.IntPtr(9),
+	}
+	var raw json.RawMessage
+	if _, err := conn.Call(ctx, lspbroker.ReferencesMethod, params, &raw); err != nil {
+		t.Fatalf("lsp.references: %v", err)
+	}
+
+	var locs []lspbroker.Location
+	if err := json.Unmarshal(raw, &locs); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	t.Logf("got %d reference location(s)", len(locs))
+	if len(locs) < 2 {
+		t.Errorf("expected at least 2 reference locations (definition + call site), got %d", len(locs))
+	}
+}
+
+// TestBroker_HoverEndToEnd exercises the lsp.hover operation end-to-end.
+// It queries hover info for the Greeting call at main.go:11:9 and expects
+// a non-empty result.
+func TestBroker_HoverEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH; skipping integration test")
+	}
+
+	fixtureDir := filepath.Join("testdata", "foo")
+	tmpDir := t.TempDir()
+	if err := copyDir(fixtureDir, tmpDir); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	mainGo := filepath.Join(tmpDir, "main.go")
+
+	cacheDir, err := os.MkdirTemp("", "lsp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cacheDir) })
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	factory := func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	}
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test", factory)
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		if err := b.Serve(serveCtx, l); err != nil && serveCtx.Err() == nil {
+			t.Logf("broker.Serve: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancelServe()
+		_ = b.Stop(context.Background())
+		<-serveDone
+	})
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial broker: %v", err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	conn.Go(serveCtx, jsonrpc2.MethodNotFound)
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancelReq := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelReq()
+
+	if _, err := lspbroker.Handshake(ctx, conn, goplsPath, "test"); err != nil {
+		t.Fatalf("broker.handshake: %v", err)
+	}
+
+	// Query hover for the Greeting call at main.go:11:9.
+	params := lspbroker.DefinitionParams{
+		Version:   lspbroker.ProtocolVersion,
+		File:      mainGo,
+		Line:      11,
+		Character: lspbroker.IntPtr(9),
+	}
+	var raw json.RawMessage
+	if _, err := conn.Call(ctx, lspbroker.HoverMethod, params, &raw); err != nil {
+		t.Fatalf("lsp.hover: %v", err)
+	}
+
+	t.Logf("hover result: %s", string(raw))
+	if len(raw) == 0 || string(raw) == "null" {
+		t.Error("expected non-empty hover result, got null/empty")
+	}
+}
+
+// TestBroker_DocumentSymbolEndToEnd exercises the lsp.documentSymbol operation
+// end-to-end. It queries symbols for main.go and expects at least the "main"
+// function symbol in the result.
+func TestBroker_DocumentSymbolEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH; skipping integration test")
+	}
+
+	fixtureDir := filepath.Join("testdata", "foo")
+	tmpDir := t.TempDir()
+	if err := copyDir(fixtureDir, tmpDir); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	mainGo := filepath.Join(tmpDir, "main.go")
+
+	cacheDir, err := os.MkdirTemp("", "lsp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cacheDir) })
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	factory := func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	}
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test", factory)
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		if err := b.Serve(serveCtx, l); err != nil && serveCtx.Err() == nil {
+			t.Logf("broker.Serve: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancelServe()
+		_ = b.Stop(context.Background())
+		<-serveDone
+	})
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial broker: %v", err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	conn.Go(serveCtx, jsonrpc2.MethodNotFound)
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancelReq := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelReq()
+
+	if _, err := lspbroker.Handshake(ctx, conn, goplsPath, "test"); err != nil {
+		t.Fatalf("broker.handshake: %v", err)
+	}
+
+	// Query document symbols for main.go.
+	params := lspbroker.DocumentSymbolParams{
+		Version: lspbroker.ProtocolVersion,
+		File:    mainGo,
+	}
+	var raw json.RawMessage
+	if _, err := conn.Call(ctx, lspbroker.DocumentSymbolMethod, params, &raw); err != nil {
+		t.Fatalf("lsp.documentSymbol: %v", err)
+	}
+
+	t.Logf("documentSymbol result: %s", string(raw))
+
+	// Unmarshal as a generic slice to check for "main".
+	var syms []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &syms); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(syms) == 0 {
+		t.Fatal("expected at least one symbol, got none")
+	}
+
+	foundMain := false
+	for _, s := range syms {
+		if s.Name == "main" {
+			foundMain = true
+			break
+		}
+	}
+	if !foundMain {
+		t.Errorf("expected 'main' in symbols, got %v", syms)
+	}
+}
+
 // copyDir recursively copies the contents of src into dst (which must
 // exist). Duplicated from goadapter/adapter_integration_test.go because
 // that file lives in a different external test package and its helpers
