@@ -671,6 +671,21 @@ func (b *Broker) sessionForFile(ctx context.Context, file string) (Session, erro
 
 	ext := filepath.Ext(file)
 
+	// If the "file" is actually a directory (e.g., cwd sent by wsymbols
+	// for session routing), synthesize a fake .go file path inside it.
+	// This lets the rest of the routing logic (FindGoRoot, isGoExt, etc.)
+	// work unchanged — they all expect a file path, not a directory.
+	if ext == "" {
+		if info, statErr := os.Stat(file); statErr == nil && info.IsDir() {
+			file = filepath.Join(file, "_.go")
+			ext = ".go"
+			// Re-derive root from the synthetic path.
+			if r, err := FindProjectRoot(file); err == nil {
+				root = r
+			}
+		}
+	}
+
 	cfg, err := b.loadConfigCached(ctx, root)
 	if err != nil {
 		return nil, fmt.Errorf("broker: load config for %s: %w", root, err)
