@@ -46,6 +46,12 @@ func Definition(w io.Writer, inputFile string, inputLine, inputChar int, locs []
 		inputRel := makeRelative(inputFile)
 		destRel := makeRelative(destFile)
 
+		// Name-based query (no input position): show destination only.
+		if inputLine == 0 {
+			fmt.Fprintf(w, "%s:%d:%d\n", destRel, destLine, destChar)
+			return
+		}
+
 		// Detect "is itself a definition": same file and position.
 		if destFile == inputFile && destLine == inputLine && destChar == inputChar {
 			fmt.Fprintf(w, "%s:%d:%d is itself a definition\n",
