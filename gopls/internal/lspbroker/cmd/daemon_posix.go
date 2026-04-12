@@ -43,6 +43,7 @@ func spawnDetached(selfPath, cacheDir string) error {
 			devNull.Fd(), // stdout
 			logFile.Fd(), // stderr
 		},
+		Env: os.Environ(),
 		Sys: &syscall.SysProcAttr{
 			Setsid: true, // detach from the controlling terminal
 		},
