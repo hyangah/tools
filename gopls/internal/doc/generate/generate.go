@@ -82,6 +82,7 @@ func doMain(write bool) (bool, error) {
 		{"doc/codelenses.md", rewriteCodeLenses},
 		{"doc/analyzers.md", rewriteAnalyzers},
 		{"doc/inlayHints.md", rewriteInlayHints},
+		{"doc/features/mcp.md", rewriteMCP},
 	} {
 		file := filepath.Join(goplsDir, f.name)
 		old, err := os.ReadFile(file)
@@ -824,6 +825,24 @@ func replaceSection(content []byte, sectionName string, replacement []byte) ([]b
 	result = append(result, replacement...)
 	result = append(result, content[idx[3]:]...)
 	return result, nil
+}
+
+// rewriteMCP updates the MCP tools documentation in mcp.md based on
+// the tool definitions in mcp.go.
+func rewriteMCP(old []byte, _ *doc.API) ([]byte, error) {
+	// Load the mcp.go source file
+	mcpPath, err := pkgDir("golang.org/x/tools/gopls/internal/mcp")
+	if err != nil {
+		return nil, err
+	}
+	mcpGoPath := filepath.Join(mcpPath, "mcp.go")
+
+	mcpSrc, err := os.ReadFile(mcpGoPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading mcp.go: %w", err)
+	}
+
+	return rewriteMCPTools(old, string(mcpSrc))
 }
 
 type onOff bool

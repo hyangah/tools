@@ -37,10 +37,34 @@ gopls mcp
 
 This runs a standalone gopls instance that speaks MCP over stdin/stdout.
 
+## Available tools
+
+The gopls MCP server exposes the following tools for use by AI assistants:
+
+<!-- BEGIN_MCP_TOOLS -->
+### Enabled by default
+
+- **go_workspace** — Summarize the structure of the Go workspace (module, workspace, or GOPATH project)
+- **go_package_api** — Summarize the public API of a Go package
+- **go_diagnostics** — Check for parse, build, and lint errors across the workspace
+- **go_rename_symbol** — Rename a symbol across the entire workspace
+- **go_symbol_references** — Find all references to a symbol from the current file's package
+- **go_search** — Fuzzy search for symbols by name
+- **go_file_context** — Summarize a file's intra-package dependencies
+- **go_vulncheck** — Check for security vulnerabilities in the workspace
+
+### Disabled by default (can be enabled in configuration)
+
+- **go_file_metadata** — Get metadata about a package from a file
+- **go_context** — Get context for a region within a file
+- **go_file_diagnostics** — Get diagnostics for a specific file
+- **go_references** — Find references to a symbol at a specific location
+<!-- END_MCP_TOOLS -->
+
 ## Instructions to the model
 
 This gopls MCP server includes model instructions for its usage, describing
-workflows for interacting with Go code using its available tools. These
+best practices for working with Go code using its available tools. These
 instructions are automatically published during the MCP server initialization,
 but you may want to also load them as additional context in your AI-assisted
 session, to emphasize their importance. The `-instructions` flag causes them to
@@ -49,6 +73,29 @@ be printed, so that you can do, for example:
 ```
 gopls mcp -instructions > /path/to/contextFile.md
 ```
+
+### What the instructions cover
+
+The model instructions provide two key workflows:
+
+1. **Read Workflow** — For understanding a Go codebase:
+   - Detect and analyze Go workspace structure
+   - Search for symbols by name
+   - Understand file dependencies within packages
+   - Explore package public APIs
+   - Run security vulnerability checks
+
+2. **Edit Workflow** — For safely modifying Go code:
+   - Find all references before modifying symbols
+   - Make edits and validate with diagnostics
+   - Handle suggested fixes from diagnostics
+   - Check for security issues after dependency updates
+   - Run tests to verify changes
+
+The instructions emphasize running `go_workspace` at the start of every session,
+followed by `go_vulncheck` to identify security risks. They also provide detailed
+guidance on using each tool correctly and in the right order to avoid errors and
+maintain code quality.
 
 ## Coding assistant setup
 
