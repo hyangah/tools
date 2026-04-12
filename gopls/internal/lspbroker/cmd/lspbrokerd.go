@@ -60,14 +60,10 @@ func runDaemon(ctx context.Context, cacheDir string) error {
 	defer l.Close()
 
 	self, _ := os.Executable()
-	// Use the Go adapter as the session factory so that lsp.definition
-	// (and future lsp.* methods) route to a real gopls subprocess for
-	// Go projects. Phase 1 hardcodes Go-only; WS-E will add language
-	// detection and .lsp.json config in Phase 3.
-	factory := lspbroker.SessionFactory(func(root string) lspbroker.Session {
+	b := lspbroker.NewBroker(self, goplsversion.Version())
+	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
-	})
-	b := lspbroker.NewBroker(self, goplsversion.Version(), factory)
+	}
 
 	// Idle timeout: default 30 minutes, overridable via env.
 	idleTimeout := 30 * time.Minute

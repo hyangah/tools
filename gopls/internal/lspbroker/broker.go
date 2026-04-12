@@ -20,6 +20,12 @@ import (
 	"golang.org/x/tools/internal/jsonrpc2"
 )
 
+// sessionKey identifies a unique session: one per (project root, server ID).
+type sessionKey struct {
+	root     string // absolute path to project root
+	serverID string // e.g. "go", "typescript", or "override" (tests)
+}
+
 // Broker is the top-level daemon object. It listens on a unix domain
 // socket under [CacheRoot], accepts incoming broker-protocol connections
 // from lspcli, and dispatches requests to per-workspace [Session]
@@ -31,8 +37,19 @@ import (
 type Broker struct {
 	goplsPath    string
 	goplsVersion string
-	newSession   SessionFactory
 	startTime    time.Time
+
+	// GoSessionFactory creates a [Session] for Go source files. It is
+	// called when sessionForFile determines a file belongs to a Go
+	// project (go.mod/go.work detected). Set by daemon startup code
+	// to wrap goadapter.NewGoSession. If nil, Go files return
+	// [ErrNoServer].
+	GoSessionFactory func(root string) Session
+
+	// SessionOverride, if non-nil, bypasses all config-aware routing
+	// in sessionForFile. Every request creates a session via this
+	// function keyed by filepath.Dir(file). Used in tests.
+	SessionOverride func(root string) Session
 
 	// IdleTimeout is how long the broker waits with no requests before
 	// shutting itself down. Zero means no idle timeout.
@@ -40,7 +57,7 @@ type Broker struct {
 
 	// mu protects sessions, stopped, idle, and listener.
 	mu       sync.Mutex
-	sessions map[string]Session // keyed by workspace root
+	sessions map[sessionKey]Session
 	stopped  bool
 	idle     *idleTracker // nil if IdleTimeout == 0
 	listener net.Listener // set by Serve, closed by Stop
@@ -49,23 +66,18 @@ type Broker struct {
 	cancel context.CancelFunc
 }
 
-// NewBroker returns a new [Broker] with the given identity strings and
-// session factory.
+// NewBroker returns a new [Broker] with the given identity strings.
 //
 // goplsPath should be os.Executable(); goplsVersion is the gopls
-// version string (may be empty). factory is called to create a new
-// [Session] whenever the broker opens a new workspace root. Pass
-// [NewStubSessionFunc] for testing; pass the goadapter factory in
-// production.
-func NewBroker(goplsPath, goplsVersion string, factory SessionFactory) *Broker {
-	if factory == nil {
-		factory = NewStubSessionFunc
-	}
+// version string (may be empty).
+//
+// After construction, set [Broker.GoSessionFactory] to enable Go
+// support and optionally set [Broker.SessionOverride] for tests.
+func NewBroker(goplsPath, goplsVersion string) *Broker {
 	return &Broker{
 		goplsPath:    goplsPath,
 		goplsVersion: goplsVersion,
-		newSession:   factory,
-		sessions:     make(map[string]Session),
+		sessions:     make(map[sessionKey]Session),
 	}
 }
 
@@ -74,8 +86,8 @@ func (b *Broker) Sessions() []SessionInfo {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	out := make([]SessionInfo, 0, len(b.sessions))
-	for root := range b.sessions {
-		out = append(out, SessionInfo{Root: root})
+	for key := range b.sessions {
+		out = append(out, SessionInfo{Root: key.root})
 	}
 	return out
 }
@@ -428,23 +440,87 @@ func (b *Broker) resolveNamedPosition(ctx context.Context, sess Session, params 
 }
 
 // sessionForFile returns the [Session] responsible for the given
-// absolute file path, creating one if none exists. The session root is
-// determined by walking up the directory tree to find the nearest
-// directory. In Phase 1 no project-root detection is performed; the
-// file's parent directory is used as the root.
+// absolute file path, creating one if none exists.
+//
+// The routing logic:
+//  1. If SessionOverride is set (tests), bypass all detection.
+//  2. Find the project root via [FindProjectRoot].
+//  3. Load .lsp.json config if present.
+//  4. For Go-associated extensions (.go, .mod, .sum): use Go auto-config
+//     unless .lsp.json explicitly claims the extension.
+//  5. For other extensions: route via .lsp.json extensionToLanguage.
+//  6. No match → [ErrNoServer].
 func (b *Broker) sessionForFile(ctx context.Context, file string) (Session, error) {
-	root := filepath.Dir(file)
+	// Test override: bypass all config-aware routing.
+	if b.SessionOverride != nil {
+		root := filepath.Dir(file)
+		return b.getOrCreateSession(ctx, root, "override", func() Session {
+			return b.SessionOverride(root)
+		})
+	}
+
+	root, err := FindProjectRoot(file)
+	if err != nil {
+		return nil, err
+	}
+
+	ext := filepath.Ext(file)
+
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		return nil, fmt.Errorf("broker: load config for %s: %w", root, err)
+	}
+
+	// Go auto-config: .go/.mod/.sum files in a Go project.
+	// Go auto-config wins unless .lsp.json explicitly claims the extension.
+	if isGoExt(ext) {
+		explicitOverride := false
+		if cfg != nil {
+			_, srv := cfg.ServerForExtension(ext)
+			explicitOverride = srv != nil
+		}
+		if !explicitOverride {
+			goRoot := FindGoRoot(filepath.Dir(file))
+			if goRoot != "" {
+				if b.GoSessionFactory == nil {
+					return nil, ErrNoServer
+				}
+				return b.getOrCreateSession(ctx, goRoot, "go", func() Session {
+					return b.GoSessionFactory(goRoot)
+				})
+			}
+		}
+	}
+
+	// Config-based routing for all other extensions (or Go extensions
+	// explicitly overridden in .lsp.json).
+	if cfg != nil {
+		serverID, serverCfg := cfg.ServerForExtension(ext)
+		if serverCfg != nil {
+			return b.getOrCreateSession(ctx, root, serverID, func() Session {
+				return NewGenericSession(root, serverCfg)
+			})
+		}
+	}
+
+	return nil, ErrNoServer
+}
+
+// getOrCreateSession returns an existing session for the given key, or
+// creates one via the create function if none exists.
+func (b *Broker) getOrCreateSession(ctx context.Context, root, serverID string, create func() Session) (Session, error) {
+	key := sessionKey{root: root, serverID: serverID}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.stopped {
 		return nil, fmt.Errorf("broker is stopped")
 	}
-	if s, ok := b.sessions[root]; ok {
+	if s, ok := b.sessions[key]; ok {
 		return s, nil
 	}
-	s := b.newSession(root)
-	b.sessions[root] = s
-	event.Log(ctx, fmt.Sprintf("broker: new session for root %s", root))
+	s := create()
+	b.sessions[key] = s
+	event.Log(ctx, fmt.Sprintf("broker: new session root=%s server=%s", root, serverID))
 	return s, nil
 }
 

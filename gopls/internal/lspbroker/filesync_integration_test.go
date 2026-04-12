@@ -48,11 +48,11 @@ func TestFileSyncAfterEdit(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	factory := func(root string) lspbroker.Session {
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
 	}
-	goplsPath, _ := os.Executable()
-	b := lspbroker.NewBroker(goplsPath, "test", factory)
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
 	serveDone := make(chan struct{})
@@ -187,11 +187,11 @@ func TestPositionEncodingRoundTrip(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	factory := func(root string) lspbroker.Session {
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
 	}
-	goplsPath, _ := os.Executable()
-	b := lspbroker.NewBroker(goplsPath, "test", factory)
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
 	serveDone := make(chan struct{})

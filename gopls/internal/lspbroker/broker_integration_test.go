@@ -7,6 +7,7 @@ package lspbroker_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -79,11 +80,11 @@ func TestBroker_DefinitionEndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	factory := func(root string) lspbroker.Session {
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
 	}
-	goplsPath, _ := os.Executable()
-	b := lspbroker.NewBroker(goplsPath, "test", factory)
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
 	serveDone := make(chan struct{})
@@ -201,11 +202,11 @@ func TestBroker_DefinitionNameBased(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	factory := func(root string) lspbroker.Session {
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
 	}
-	goplsPath, _ := os.Executable()
-	b := lspbroker.NewBroker(goplsPath, "test", factory)
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
 	serveDone := make(chan struct{})
@@ -291,11 +292,11 @@ func TestBroker_DefinitionSymbolNotFound(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	factory := func(root string) lspbroker.Session {
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
 	}
-	goplsPath, _ := os.Executable()
-	b := lspbroker.NewBroker(goplsPath, "test", factory)
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
 	serveDone := make(chan struct{})
@@ -372,11 +373,11 @@ func TestBroker_ReferencesEndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	factory := func(root string) lspbroker.Session {
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
 	}
-	goplsPath, _ := os.Executable()
-	b := lspbroker.NewBroker(goplsPath, "test", factory)
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
 	serveDone := make(chan struct{})
@@ -458,11 +459,11 @@ func TestBroker_HoverEndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	factory := func(root string) lspbroker.Session {
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
 	}
-	goplsPath, _ := os.Executable()
-	b := lspbroker.NewBroker(goplsPath, "test", factory)
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
 	serveDone := make(chan struct{})
@@ -540,11 +541,11 @@ func TestBroker_DocumentSymbolEndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	factory := func(root string) lspbroker.Session {
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
 		return goadapter.NewGoSession(root)
 	}
-	goplsPath, _ := os.Executable()
-	b := lspbroker.NewBroker(goplsPath, "test", factory)
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
 	serveDone := make(chan struct{})
@@ -610,6 +611,298 @@ func TestBroker_DocumentSymbolEndToEnd(t *testing.T) {
 	}
 	if !foundMain {
 		t.Errorf("expected 'main' in symbols, got %v", syms)
+	}
+}
+
+// TestBroker_MultiLanguageRouting verifies that the broker routes
+// requests to different sessions based on file extension. .go files
+// go to the GoSession (via GoSessionFactory); .fake files go to a
+// GenericSession backed by the fakelsp test binary.
+func TestBroker_MultiLanguageRouting(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH; skipping integration test")
+	}
+
+	// Build the fake LSP server binary.
+	fakeLSPBin := filepath.Join(t.TempDir(), "fakelsp")
+	buildCmd := exec.Command("go", "build", "-o", fakeLSPBin, "./testdata/fakelsp")
+	buildCmd.Dir = filepath.Join(".")
+	// Set GOFLAGS to suppress the workspace mode that the parent module
+	// might enable, which would interfere with building the standalone
+	// testdata program.
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fakelsp: %v\n%s", err, out)
+	}
+
+	// Copy the multilang fixture to a temp dir.
+	fixtureDir := filepath.Join("testdata", "multilang")
+	tmpDir := t.TempDir()
+	if err := copyDir(fixtureDir, tmpDir); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	mainGo := filepath.Join(tmpDir, "main.go")
+	appFake := filepath.Join(tmpDir, "app.fake")
+
+	// Write .lsp.json that configures fakelsp for .fake files.
+	lspConfig := fmt.Sprintf(`{
+		"version": 1,
+		"servers": {
+			"fake": {
+				"command": [%q],
+				"extensionToLanguage": {
+					".fake": "fake"
+				}
+			}
+		}
+	}`, fakeLSPBin)
+	if err := os.WriteFile(filepath.Join(tmpDir, ".lsp.json"), []byte(lspConfig), 0644); err != nil {
+		t.Fatalf("write .lsp.json: %v", err)
+	}
+
+	cacheDir, err := os.MkdirTemp("", "lsp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cacheDir) })
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	}
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		if err := b.Serve(serveCtx, l); err != nil && serveCtx.Err() == nil {
+			t.Logf("broker.Serve: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancelServe()
+		_ = b.Stop(context.Background())
+		<-serveDone
+	})
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial broker: %v", err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	conn.Go(serveCtx, jsonrpc2.MethodNotFound)
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancelReq := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelReq()
+
+	if _, err := lspbroker.Handshake(ctx, conn, goplsPath, "test"); err != nil {
+		t.Fatalf("broker.handshake: %v", err)
+	}
+
+	// --- Test 1: .go file routes to GoSession ---
+	t.Run("go_definition", func(t *testing.T) {
+		params := lspbroker.DefinitionParams{
+			Version:   lspbroker.ProtocolVersion,
+			File:      mainGo,
+			Line:      11,
+			Character: lspbroker.IntPtr(14),
+		}
+		var raw json.RawMessage
+		if _, err := conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw); err != nil {
+			t.Fatalf("lsp.definition on .go: %v", err)
+		}
+		var locs []lspbroker.Location
+		if err := json.Unmarshal(raw, &locs); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(locs) == 0 {
+			t.Fatal("expected definition locations for .go file, got none")
+		}
+		t.Logf(".go definition: %s line=%d", locs[0].URI, locs[0].Range.Start.Line)
+	})
+
+	// --- Test 2: .fake file routes to GenericSession (fakelsp) ---
+	t.Run("fake_definition", func(t *testing.T) {
+		params := lspbroker.DefinitionParams{
+			Version:   lspbroker.ProtocolVersion,
+			File:      appFake,
+			Line:      1,
+			Character: lspbroker.IntPtr(1),
+		}
+		var raw json.RawMessage
+		if _, err := conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw); err != nil {
+			t.Fatalf("lsp.definition on .fake: %v", err)
+		}
+		var locs []lspbroker.Location
+		if err := json.Unmarshal(raw, &locs); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(locs) == 0 {
+			t.Fatal("expected definition locations for .fake file, got none")
+		}
+		// fakelsp returns line 0, char 0 of the same file.
+		if !strings.HasSuffix(strings.TrimPrefix(locs[0].URI, "file://"), "app.fake") {
+			t.Errorf("expected URI ending in app.fake, got %s", locs[0].URI)
+		}
+		t.Logf(".fake definition: %s line=%d", locs[0].URI, locs[0].Range.Start.Line)
+	})
+
+	// --- Test 3: .fake hover ---
+	t.Run("fake_hover", func(t *testing.T) {
+		params := lspbroker.DefinitionParams{
+			Version:   lspbroker.ProtocolVersion,
+			File:      appFake,
+			Line:      1,
+			Character: lspbroker.IntPtr(1),
+		}
+		var raw json.RawMessage
+		if _, err := conn.Call(ctx, lspbroker.HoverMethod, params, &raw); err != nil {
+			t.Fatalf("lsp.hover on .fake: %v", err)
+		}
+		if len(raw) == 0 || string(raw) == "null" {
+			t.Fatal("expected hover result for .fake file, got empty")
+		}
+		t.Logf(".fake hover: %s", string(raw))
+	})
+
+	// --- Test 4: extension with no server configured ---
+	t.Run("unknown_extension", func(t *testing.T) {
+		unknownFile := filepath.Join(tmpDir, "style.css")
+		os.WriteFile(unknownFile, []byte("body {}"), 0644)
+		params := lspbroker.DefinitionParams{
+			Version:   lspbroker.ProtocolVersion,
+			File:      unknownFile,
+			Line:      1,
+			Character: lspbroker.IntPtr(1),
+		}
+		var raw json.RawMessage
+		_, err := conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw)
+		if err == nil {
+			t.Fatal("expected error for .css file (no server), got nil")
+		}
+		t.Logf(".css error (expected): %v", err)
+	})
+}
+
+// TestBroker_GoAutoConfigPriority verifies that .go files route to the
+// GoSession even when .lsp.json exists, unless .lsp.json explicitly
+// claims the .go extension.
+func TestBroker_GoAutoConfigPriority(t *testing.T) {
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH; skipping integration test")
+	}
+
+	// Build fakelsp.
+	fakeLSPBin := filepath.Join(t.TempDir(), "fakelsp")
+	buildCmd := exec.Command("go", "build", "-o", fakeLSPBin, "./testdata/fakelsp")
+	buildCmd.Dir = filepath.Join(".")
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fakelsp: %v\n%s", err, out)
+	}
+
+	fixtureDir := filepath.Join("testdata", "multilang")
+	tmpDir := t.TempDir()
+	if err := copyDir(fixtureDir, tmpDir); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+	mainGo := filepath.Join(tmpDir, "main.go")
+
+	// Write .lsp.json that configures fakelsp for .fake but NOT .go.
+	lspConfig := fmt.Sprintf(`{
+		"version": 1,
+		"servers": {
+			"fake": {
+				"command": [%q],
+				"extensionToLanguage": { ".fake": "fake" }
+			}
+		}
+	}`, fakeLSPBin)
+	os.WriteFile(filepath.Join(tmpDir, ".lsp.json"), []byte(lspConfig), 0644)
+
+	cacheDir, err := os.MkdirTemp("", "lsp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(cacheDir) })
+	l, err := lspbroker.NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	goplsPath, _ := os.Executable()
+	b := lspbroker.NewBroker(goplsPath, "test")
+	b.GoSessionFactory = func(root string) lspbroker.Session {
+		return goadapter.NewGoSession(root)
+	}
+
+	serveCtx, cancelServe := context.WithCancel(context.Background())
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		b.Serve(serveCtx, l)
+	}()
+	t.Cleanup(func() {
+		cancelServe()
+		b.Stop(context.Background())
+		<-serveDone
+	})
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	conn.Go(serveCtx, jsonrpc2.MethodNotFound)
+	t.Cleanup(func() { conn.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if _, err := lspbroker.Handshake(ctx, conn, goplsPath, "test"); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+
+	// .go file should still route to GoSession (real gopls), not fakelsp.
+	// We verify by checking that the definition result points to the real
+	// location in the Go source, not fakelsp's canned response.
+	params := lspbroker.DefinitionParams{
+		Version:   lspbroker.ProtocolVersion,
+		File:      mainGo,
+		Line:      11,
+		Character: lspbroker.IntPtr(14),
+	}
+	var raw json.RawMessage
+	if _, err := conn.Call(ctx, lspbroker.DefinitionMethod, params, &raw); err != nil {
+		t.Fatalf("lsp.definition on .go: %v", err)
+	}
+	var locs []lspbroker.Location
+	if err := json.Unmarshal(raw, &locs); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(locs) == 0 {
+		t.Fatal("expected definition locations, got none")
+	}
+	// Verify this came from gopls (points at Greeting definition in main.go),
+	// not fakelsp (which would return line 0, char 0).
+	got := locs[0]
+	t.Logf("Go auto-config result: %s line=%d char=%d", got.URI, got.Range.Start.Line, got.Range.Start.Character)
+	if got.Range.Start.Line == 0 && got.Range.Start.Character == 0 {
+		t.Error("definition looks like it came from fakelsp (line=0, char=0); expected real gopls result")
 	}
 }
 

@@ -28,7 +28,8 @@ func startTestBroker(t *testing.T) (conn jsonrpc2.Conn, cacheDir string) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	b := NewBroker("/test/gopls", "test", nil) // nil → stub sessions
+	b := NewBroker("/test/gopls", "test")
+	b.SessionOverride = NewStubSessionFunc
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()
@@ -169,7 +170,7 @@ func TestBroker_StopRPC(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	b := NewBroker("/test/gopls", "test", nil)
+	b := NewBroker("/test/gopls", "test")
 	ctx := context.Background()
 
 	serveDone := make(chan error, 1)
@@ -221,7 +222,7 @@ func TestBroker_IdleTimeout(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	b := NewBroker("/test/gopls", "test", nil)
+	b := NewBroker("/test/gopls", "test")
 	b.IdleTimeout = 200 * time.Millisecond
 
 	serveDone := make(chan error, 1)
@@ -247,7 +248,7 @@ func TestBroker_IdleBumpResetsTimeout(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	b := NewBroker("/test/gopls", "test", nil)
+	b := NewBroker("/test/gopls", "test")
 	b.IdleTimeout = 300 * time.Millisecond
 
 	serveDone := make(chan error, 1)

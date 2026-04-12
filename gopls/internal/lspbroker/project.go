@@ -135,3 +135,27 @@ func isDirAt(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
+
+// FindGoRoot walks up from dir looking for go.work or go.mod. It returns
+// the directory containing the sentinel, or "" if not found. go.work
+// takes priority over go.mod. Walking stops at $HOME.
+func FindGoRoot(dir string) string {
+	home, _ := os.UserHomeDir()
+	if d := walkUpFor(dir, home, func(d string) bool {
+		return fileExistsAny(filepath.Join(d, "go.work"))
+	}); d != "" {
+		return d
+	}
+	return walkUpFor(dir, home, func(d string) bool {
+		return fileExistsAny(filepath.Join(d, "go.mod"))
+	})
+}
+
+// isGoExt reports whether ext is a Go-associated file extension.
+func isGoExt(ext string) bool {
+	switch ext {
+	case ".go", ".mod", ".sum":
+		return true
+	}
+	return false
+}
