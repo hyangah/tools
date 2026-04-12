@@ -457,6 +457,10 @@ func (b *Broker) handleRename(ctx context.Context, reply jsonrpc2.Replier, req j
 		return reply(ctx, nil, fmt.Errorf("broker: apply edits: %w", err))
 	}
 
+	// Attach the raw WorkspaceEdit so --json consumers can inspect
+	// the exact text edits proposed by the language server.
+	result.WorkspaceEdit = json.RawMessage(resultRaw)
+
 	// After applying, sync each changed file back to the LSP server so that
 	// subsequent requests see the updated content.
 	if result.Applied {

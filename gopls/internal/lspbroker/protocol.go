@@ -321,6 +321,12 @@ type RenameResult struct {
 	// Applied is true when the edits were written to disk (i.e. DryRun
 	// was false). It is false for dry-run results.
 	Applied bool `json:"applied"`
+
+	// WorkspaceEdit is the raw LSP WorkspaceEdit returned by the
+	// language server, JSON-encoded. Included so that --json consumers
+	// (agents) can inspect or re-apply the exact edits. Omitted from
+	// text output.
+	WorkspaceEdit json.RawMessage `json:"workspaceEdit,omitempty"`
 }
 
 // FileChange summarises the edits made (or proposed) in one file.
