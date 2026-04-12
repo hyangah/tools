@@ -574,7 +574,7 @@ func (b *Broker) resolveNamedPosition(ctx context.Context, sess Session, params 
 		line     int // 1-based
 		char     int // 1-based
 	}
-	var candidates []candidate
+	var exact, fuzzy []candidate
 	var walk func(syms []protocol.DocumentSymbol, prefix string)
 	walk = func(syms []protocol.DocumentSymbol, prefix string) {
 		for _, sym := range syms {
@@ -582,19 +582,33 @@ func (b *Broker) resolveNamedPosition(ctx context.Context, sess Session, params 
 			if prefix != "" {
 				fullName = prefix + "." + sym.Name
 			}
-			// Check if the full dotted name ends with the user's query.
-			if strings.HasSuffix(fullName, params.Symbol) || sym.Name == params.Symbol {
+			if sym.Name == params.Symbol || fullName == params.Symbol {
+				// Exact match on the bare name or full dotted name.
 				c := candidate{
 					fullName: fullName,
 					line:     int(sym.SelectionRange.Start.Line) + 1, // 0-based → 1-based
 					char:     int(sym.SelectionRange.Start.Character) + 1,
 				}
-				candidates = append(candidates, c)
+				exact = append(exact, c)
+			} else if strings.HasSuffix(fullName, params.Symbol) {
+				// Fuzzy match: the full dotted name ends with the query.
+				c := candidate{
+					fullName: fullName,
+					line:     int(sym.SelectionRange.Start.Line) + 1,
+					char:     int(sym.SelectionRange.Start.Character) + 1,
+				}
+				fuzzy = append(fuzzy, c)
 			}
 			walk(sym.Children, fullName)
 		}
 	}
 	walk(symbols, "")
+
+	// Prefer exact matches; fall back to fuzzy only when no exact match exists.
+	candidates := exact
+	if len(candidates) == 0 {
+		candidates = fuzzy
+	}
 
 	// If line is specified, narrow candidates to those on that line.
 	if params.Line > 0 && len(candidates) > 1 {
