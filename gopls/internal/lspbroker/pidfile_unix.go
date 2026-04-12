@@ -54,10 +54,10 @@ func AcquirePIDFile(path string) (cleanup func(), err error) {
 	}, nil
 }
 
-// readPIDFile reads and parses the integer PID from the file at path.
+// ReadPIDFile reads and parses the integer PID from the file at path.
 // It returns an error if the file is missing, empty, or does not
 // contain a valid positive integer.
-func readPIDFile(path string) (int, error) {
+func ReadPIDFile(path string) (int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, fmt.Errorf("read pidfile %s: %w", path, err)
@@ -69,10 +69,10 @@ func readPIDFile(path string) (int, error) {
 	return pid, nil
 }
 
-// isPIDAlive reports whether a process with the given pid is currently
+// IsPIDAlive reports whether a process with the given pid is currently
 // running. It uses kill(pid, 0) which checks process existence without
 // delivering a signal.
-func isPIDAlive(pid int) bool {
+func IsPIDAlive(pid int) bool {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false

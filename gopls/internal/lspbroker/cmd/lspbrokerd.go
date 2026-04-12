@@ -68,7 +68,19 @@ func runDaemon(ctx context.Context, cacheDir string) error {
 		return goadapter.NewGoSession(root)
 	})
 	b := lspbroker.NewBroker(self, goplsversion.Version(), factory)
-	fmt.Fprintf(os.Stderr, "lspbrokerd: listening on %s\n", l.Addr())
+
+	// Idle timeout: default 30 minutes, overridable via env.
+	idleTimeout := 30 * time.Minute
+	if s := os.Getenv("LSP_BROKER_IDLE_TIMEOUT"); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("lspbrokerd: parse LSP_BROKER_IDLE_TIMEOUT=%q: %w", s, err)
+		}
+		idleTimeout = d
+	}
+	b.IdleTimeout = idleTimeout
+
+	fmt.Fprintf(os.Stderr, "lspbrokerd: listening on %s (idle timeout %v)\n", l.Addr(), idleTimeout)
 	return b.Serve(ctx, l)
 }
 

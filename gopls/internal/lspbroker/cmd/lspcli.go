@@ -65,8 +65,16 @@ func RunLSPCLI(ctx context.Context, args ...string) error {
 			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
 		}
 		if exitCode != 0 {
-			// Return a sentinel that causes the top-level runner to exit
-			// with the given code.
+			return &exitError{code: exitCode}
+		}
+		return nil
+
+	case "daemon":
+		exitCode, runErr := subcommands.RunDaemon(ctx, subArgs, cacheDir, selfPath, os.Stdout)
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+		}
+		if exitCode != 0 {
 			return &exitError{code: exitCode}
 		}
 		return nil

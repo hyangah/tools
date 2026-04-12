@@ -20,10 +20,10 @@ func AcquirePIDFile(_ string) (cleanup func(), err error) {
 	return nil, errNotSupported
 }
 
-func readPIDFile(_ string) (int, error) {
+func ReadPIDFile(_ string) (int, error) {
 	return 0, errNotSupported
 }
 
-func isPIDAlive(_ int) bool {
+func IsPIDAlive(_ int) bool {
 	return false
 }

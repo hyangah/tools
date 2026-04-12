@@ -22,9 +22,9 @@ func TestAcquirePIDFile_WritesAndReleases(t *testing.T) {
 	}
 
 	// PID file must contain our PID.
-	pid, err := readPIDFile(path)
+	pid, err := ReadPIDFile(path)
 	if err != nil {
-		t.Fatalf("readPIDFile: %v", err)
+		t.Fatalf("ReadPIDFile: %v", err)
 	}
 	if pid != os.Getpid() {
 		t.Errorf("pidfile contains %d, want %d", pid, os.Getpid())
@@ -44,14 +44,14 @@ func TestAcquirePIDFile_WritesAndReleases(t *testing.T) {
 }
 
 func TestIsPIDAlive_CurrentProcess(t *testing.T) {
-	if !isPIDAlive(os.Getpid()) {
-		t.Error("isPIDAlive returned false for the current process")
+	if !IsPIDAlive(os.Getpid()) {
+		t.Error("IsPIDAlive returned false for the current process")
 	}
 }
 
 func TestIsPIDAlive_InvalidPID(t *testing.T) {
-	// PID 0 is never a valid user process; isPIDAlive must return false.
-	if isPIDAlive(0) {
-		t.Error("isPIDAlive returned true for PID 0")
+	// PID 0 is never a valid user process; IsPIDAlive must return false.
+	if IsPIDAlive(0) {
+		t.Error("IsPIDAlive returned true for PID 0")
 	}
 }

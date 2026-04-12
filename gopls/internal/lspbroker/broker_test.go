@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	"golang.org/x/tools/internal/jsonrpc2"
 )
@@ -157,4 +158,141 @@ func TestBroker_Sessions(t *testing.T) {
 	}
 	var result json.RawMessage
 	conn.Call(ctx, DefinitionMethod, params, &result) //nolint:errcheck // error expected
+}
+
+func TestBroker_StopRPC(t *testing.T) {
+	cacheDir := t.TempDir()
+
+	l, err := NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	b := NewBroker("/test/gopls", "test", nil)
+	ctx := context.Background()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- b.Serve(ctx, l)
+	}()
+
+	// Connect and handshake.
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer nc.Close()
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+	conn.Go(connCtx, jsonrpc2.MethodNotFound)
+	defer conn.Close()
+
+	if _, err := Handshake(ctx, conn, "/test/gopls", "test"); err != nil {
+		t.Fatalf("Handshake: %v", err)
+	}
+
+	// Send broker.stop — should reply before stopping.
+	_, err = conn.Call(ctx, StopMethod, nil, nil)
+	if err != nil {
+		t.Fatalf("broker.stop: %v", err)
+	}
+
+	// Close the client connection so the server-side Read unblocks.
+	conn.Close()
+	nc.Close()
+
+	// Serve should return shortly after stop.
+	select {
+	case <-serveDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("broker.Serve did not return after broker.stop")
+	}
+}
+
+func TestBroker_IdleTimeout(t *testing.T) {
+	cacheDir := t.TempDir()
+
+	l, err := NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	b := NewBroker("/test/gopls", "test", nil)
+	b.IdleTimeout = 200 * time.Millisecond
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- b.Serve(context.Background(), l)
+	}()
+
+	// The idle timeout should fire and stop the broker.
+	select {
+	case <-serveDone:
+		// Success — broker exited due to idle timeout.
+	case <-time.After(5 * time.Second):
+		t.Fatal("broker did not exit after idle timeout")
+	}
+}
+
+func TestBroker_IdleBumpResetsTimeout(t *testing.T) {
+	cacheDir := t.TempDir()
+
+	l, err := NewListener(cacheDir)
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+
+	b := NewBroker("/test/gopls", "test", nil)
+	b.IdleTimeout = 300 * time.Millisecond
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- b.Serve(context.Background(), l)
+	}()
+
+	// Send a request at 150ms to bump the timer.
+	time.Sleep(150 * time.Millisecond)
+
+	nc, err := net.Dial(l.Addr().Network(), l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer nc.Close()
+	stream := jsonrpc2.NewHeaderStream(nc)
+	conn := jsonrpc2.NewConn(stream)
+	connCtx, connCancel := context.WithCancel(context.Background())
+	defer connCancel()
+	conn.Go(connCtx, jsonrpc2.MethodNotFound)
+	defer conn.Close()
+
+	if _, err := Handshake(context.Background(), conn, "/test/gopls", "test"); err != nil {
+		t.Fatalf("Handshake: %v", err)
+	}
+
+	// After handshake the idle timer was bumped. The broker should NOT
+	// have stopped yet at 200ms (original timeout).
+	select {
+	case <-serveDone:
+		t.Fatal("broker stopped too early — idle bump didn't reset the timer")
+	case <-time.After(100 * time.Millisecond):
+		// Good, still running.
+	}
+
+	// Close the client connection so server-side Read unblocks when
+	// the idle timeout fires and Stop closes the listener.
+	conn.Close()
+	nc.Close()
+
+	// But it should stop ~300ms after the bump (so ~450ms from start).
+	select {
+	case <-serveDone:
+		// Success.
+	case <-time.After(5 * time.Second):
+		t.Fatal("broker did not exit after idle timeout")
+	}
 }

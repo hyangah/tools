@@ -7,12 +7,15 @@ package goadapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"golang.org/x/tools/gopls/internal/lspbroker"
 	"golang.org/x/tools/gopls/internal/lspbroker/lspclient"
 	"golang.org/x/tools/gopls/internal/protocol"
+	"golang.org/x/tools/internal/jsonrpc2"
 )
 
 // GoSession implements [lspbroker.Session] for Go source files. It
@@ -25,14 +28,16 @@ import (
 type GoSession struct {
 	root string
 
-	mu     sync.Mutex
-	client *lspclient.Client // nil until first request; guarded by mu
+	mu           sync.Mutex
+	client       *lspclient.Client // nil until first request; guarded by mu
+	restartCount int               // number of crash recoveries performed
+	maxRestarts  int               // crash recovery limit (default 3)
 }
 
 // NewGoSession creates a GoSession for the given workspace root.
 // No gopls subprocess is started until the first Handle call.
 func NewGoSession(root string) *GoSession {
-	return &GoSession{root: root}
+	return &GoSession{root: root, maxRestarts: 3}
 }
 
 // Root returns the absolute path to the workspace root directory.
@@ -69,9 +74,25 @@ func (s *GoSession) Close() error {
 func (s *GoSession) ensureClient(ctx context.Context) (*lspclient.Client, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// If the client exists but has crashed, attempt recovery.
 	if s.client != nil {
-		return s.client, nil
+		st := s.client.State()
+		if st == lspclient.StateErrored || st == lspclient.StateStopped {
+			if s.restartCount >= s.maxRestarts {
+				return nil, lspbroker.ErrServerCrashed
+			}
+			// Close the old client and fall through to re-dial.
+			shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			s.client.Shutdown(shutCtx)
+			cancel()
+			s.client = nil
+			s.restartCount++
+		} else {
+			return s.client, nil
+		}
 	}
+
 	rootURI := string(protocol.URIFromPath(s.root))
 	c, err := lspclient.Dial(ctx, lspclient.Config{
 		Command: []string{"gopls", "serve"},
@@ -105,11 +126,48 @@ func (s *GoSession) handleDefinition(ctx context.Context, rawParams []byte) ([]b
 
 	uri := string(protocol.URIFromPath(req.File))
 	// DefinitionParams uses 1-based line/char; lspclient uses 0-based.
-	locs, err := c.Definition(ctx, uri, uint32(req.Line-1), uint32(req.Character-1))
+	locs, err := callWithRetry(ctx, func() ([]protocol.Location, error) {
+		return c.Definition(ctx, uri, uint32(req.Line-1), uint32(req.Character-1))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("goadapter: definition: %w", err)
 	}
 	return json.Marshal(convertLocations(locs))
+}
+
+// callWithRetry retries an LSP call on ContentModified (-32801) with
+// exponential backoff: 500ms, 1000ms, 2000ms (3 retries max).
+func callWithRetry[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	backoffs := []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond, 2000 * time.Millisecond}
+	result, err := fn()
+	if err == nil {
+		return result, nil
+	}
+	for _, d := range backoffs {
+		if !isContentModified(err) {
+			return result, err
+		}
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case <-time.After(d):
+		}
+		result, err = fn()
+		if err == nil {
+			return result, nil
+		}
+	}
+	return result, err
+}
+
+// isContentModified reports whether err is an LSP ContentModified error
+// (code -32801).
+func isContentModified(err error) bool {
+	var wireErr *jsonrpc2.WireError
+	if errors.As(err, &wireErr) {
+		return wireErr.Code == lspbroker.ErrCodeContentModified
+	}
+	return false
 }
 
 // convertLocations converts a slice of [protocol.Location] to the broker

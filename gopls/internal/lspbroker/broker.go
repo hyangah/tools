@@ -32,10 +32,16 @@ type Broker struct {
 	newSession   SessionFactory
 	startTime    time.Time
 
-	// mu protects sessions and stopped.
+	// IdleTimeout is how long the broker waits with no requests before
+	// shutting itself down. Zero means no idle timeout.
+	IdleTimeout time.Duration
+
+	// mu protects sessions, stopped, idle, and listener.
 	mu       sync.Mutex
 	sessions map[string]Session // keyed by workspace root
 	stopped  bool
+	idle     *idleTracker // nil if IdleTimeout == 0
+	listener net.Listener // set by Serve, closed by Stop
 
 	// cancel shuts down the Serve loop when called.
 	cancel context.CancelFunc
@@ -85,12 +91,24 @@ func (b *Broker) Stop(ctx context.Context) error {
 	cancel := b.cancel
 	sessions := b.sessions
 	b.sessions = nil
+	idle := b.idle
+	b.idle = nil
+	l := b.listener
+	b.listener = nil
 	b.mu.Unlock()
+
+	if idle != nil {
+		idle.stop()
+	}
 
 	for _, s := range sessions {
 		if err := s.Close(); err != nil {
 			event.Error(ctx, "closing session", err)
 		}
+	}
+	// Close the listener to unblock Accept in jsonrpc2.Serve.
+	if l != nil {
+		l.Close()
 	}
 	if cancel != nil {
 		cancel()
@@ -109,6 +127,12 @@ func (b *Broker) Serve(ctx context.Context, l net.Listener) error {
 	b.mu.Lock()
 	b.cancel = cancel
 	b.startTime = time.Now()
+	b.listener = l
+	if b.IdleTimeout > 0 {
+		b.idle = newIdleTracker(b.IdleTimeout, func() {
+			b.Stop(context.Background())
+		})
+	}
 	b.mu.Unlock()
 	defer cancel()
 
@@ -134,6 +158,14 @@ func (b *Broker) newConnHandler() jsonrpc2.Handler {
 		handshaked bool
 	)
 	return func(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
+		// Bump idle timer on any incoming request (including handshake).
+		b.mu.Lock()
+		idle := b.idle
+		b.mu.Unlock()
+		if idle != nil {
+			idle.bump()
+		}
+
 		mu.Lock()
 		hs := handshaked
 		mu.Unlock()
@@ -181,9 +213,15 @@ func (b *Broker) newConnHandler() jsonrpc2.Handler {
 }
 
 // dispatch routes a post-handshake request to the appropriate handler.
-// In Phase 1 all lsp.* methods return a "not yet implemented" response.
 func (b *Broker) dispatch(ctx context.Context, reply jsonrpc2.Replier, req jsonrpc2.Request) error {
 	switch req.Method() {
+	case StopMethod:
+		// Reply before stopping so the client receives the response.
+		if err := reply(ctx, nil, nil); err != nil {
+			return err
+		}
+		go b.Stop(context.Background())
+		return nil
 	case DefinitionMethod:
 		return b.handleDefinition(ctx, reply, req)
 	default:

@@ -56,6 +56,13 @@ func (bc *BrokerConn) Close() error {
 	return bc.conn.Close()
 }
 
+// Stop sends a broker.stop request to the broker daemon, asking it to
+// shut down gracefully.
+func (bc *BrokerConn) Stop(ctx context.Context) error {
+	_, err := bc.conn.Call(ctx, lspbroker.StopMethod, nil, nil)
+	return err
+}
+
 // Definition sends an lsp.definition request to the broker daemon.
 // file must be an absolute path; line and char are 1-based per
 // the broker wire format.

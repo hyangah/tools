@@ -118,6 +118,10 @@ func Handshake(ctx context.Context, conn jsonrpc2.Conn, goplsPath, goplsVersion 
 	return &resp, nil
 }
 
+// StopMethod is the JSON-RPC method name for the broker.stop request.
+// A client sends this to request a graceful daemon shutdown.
+const StopMethod = "broker.stop"
+
 // DefinitionMethod is the JSON-RPC method name for the lsp.definition request.
 const DefinitionMethod = "lsp.definition"
 
