@@ -8,6 +8,8 @@ The server communicates using JSONRPC2 on stdin and stdout, and is intended to b
 a child of an editor process.
 
 server-flags:
+  -cli.listen=string
+    	experimental: unix socket address on which to listen for CLI protocol connections from AI coding agents
   -debug=string
     	serve debug information on the supplied address
   -listen=string

@@ -1,0 +1,26 @@
+Go code intelligence CLI (for AI agents)
+
+Usage:
+  gopls [flags] cli <command> [args]
+
+gopls cli provides Go code intelligence for AI coding agents.
+It communicates with a gopls daemon over a unix socket.
+
+Commands:
+  def FILE:LINE:COL           go to definition
+  refs FILE:LINE:COL          find references
+  hover FILE:LINE:COL         show type and documentation
+  impl FILE:LINE:COL          find implementations
+  symbols FILE                list symbols in file
+  wsymbols QUERY              search workspace symbols
+  rename FILE:LINE:COL --to NAME  rename symbol
+  sync FILE                   re-sync file after edit
+  diagnostics FILE            show errors/warnings
+
+Positions are 1-based line:column (UTF-8 byte column).
+
+cli-flags:
+  -address=string
+    	daemon unix socket address (default: auto-detect)
+  -json
+    	output results as JSON
