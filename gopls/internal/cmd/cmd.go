@@ -297,6 +297,7 @@ func (app *Application) featureCommands() []tool.Application {
 		newRemote(app, ""),
 		newRemote(app, "inspect"),
 		&links{app: app},
+		&goplsCLI{app: app},
 		&prepareRename{app: app},
 		&references{app: app},
 		&rename{app: app},

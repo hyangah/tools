@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/tools/gopls/internal/cache"
 	"golang.org/x/tools/gopls/internal/debug"
+	"golang.org/x/tools/gopls/internal/goplscli"
 	"golang.org/x/tools/gopls/internal/lsprpc"
 	"golang.org/x/tools/gopls/internal/mcp"
 	"golang.org/x/tools/gopls/internal/protocol"
@@ -42,6 +43,9 @@ type Serve struct {
 
 	// MCP Server related configurations.
 	MCPAddress string `flag:"mcp.listen" help:"experimental: address on which to listen for model context protocol connections. If port is localhost:0, pick a random port in localhost instead."`
+
+	// CLI Server related configurations.
+	CLIAddress string `flag:"cli.listen" help:"experimental: unix socket address on which to listen for CLI protocol connections from AI coding agents"`
 
 	app *Application
 }
@@ -99,8 +103,9 @@ func (s *Serve) Run(ctx context.Context, args ...string) error {
 	}
 
 	var (
-		ss       jsonrpc2.StreamServer
-		sessions mcp.Sessions // if non-nil, handle MCP sessions
+		ss          jsonrpc2.StreamServer
+		sessions    mcp.Sessions // if non-nil, handle MCP sessions
+		sharedCache *cache.Cache // shared across LSP, MCP, and CLI
 	)
 	if s.app.Remote != "" {
 		var err error
@@ -109,7 +114,8 @@ func (s *Serve) Run(ctx context.Context, args ...string) error {
 			return fmt.Errorf("creating forwarder: %w", err)
 		}
 	} else {
-		lsprpcServer := lsprpc.NewStreamServer(cache.New(nil), isDaemon, s.app.options)
+		sharedCache = cache.New(nil)
+		lsprpcServer := lsprpc.NewStreamServer(sharedCache, isDaemon, s.app.options)
 		ss = lsprpcServer
 		if s.MCPAddress != "" {
 			sessions = lsprpcServer
@@ -120,6 +126,18 @@ func (s *Serve) Run(ctx context.Context, args ...string) error {
 	// Indicate success by a special error so that successful termination
 	// of one server causes cancellation of the other.
 	success := errors.New("success")
+
+	// Start CLI server.
+	if s.CLIAddress != "" && sharedCache != nil {
+		group.Go(func() (err error) {
+			defer func() {
+				if err == nil {
+					err = success
+				}
+			}()
+			return goplscli.Serve(ctx, s.CLIAddress, sharedCache)
+		})
+	}
 
 	// Start MCP server.
 	if sessions != nil {

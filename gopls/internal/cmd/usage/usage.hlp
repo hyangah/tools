@@ -39,6 +39,7 @@ Features
   remote            interact with the gopls daemon
   inspect           interact with the gopls daemon (deprecated: use 'remote')
   links             list links in a file
+  cli               Go code intelligence CLI (for AI agents)
   prepare_rename    test validity of a rename operation at location
   references        display selected identifier's references
   rename            rename selected identifier
@@ -49,6 +50,8 @@ Features
   workspace_symbol  search symbols in workspace
 
 flags:
+  -cli.listen=string
+    	experimental: unix socket address on which to listen for CLI protocol connections from AI coding agents
   -debug=string
     	serve debug information on the supplied address
   -listen=string
