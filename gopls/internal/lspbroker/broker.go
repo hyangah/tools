@@ -491,8 +491,36 @@ func (b *Broker) handleDiagnostics(ctx context.Context, reply jsonrpc2.Replier, 
 	}
 
 	if params.File != "" {
+		// Ensure the file is opened/synced so gopls starts analyzing it.
+		// Without this, querying diagnostics on an unopened file returns
+		// empty because gopls hasn't seen the file yet.
+		sess, err := b.sessionForFile(ctx, params.File)
+		if err != nil {
+			return reply(ctx, nil, err)
+		}
+		if err := sess.Sync(ctx, params.File); err != nil {
+			return reply(ctx, nil, fmt.Errorf("sync %s: %w", params.File, err))
+		}
+
 		uri := string(protocol.URIFromPath(params.File))
-		diags := b.Diags.ForFile(uri)
+
+		// Poll for diagnostics — gopls pushes them asynchronously after
+		// sync, so they may not be available immediately.
+		var diags []protocol.Diagnostic
+		for attempt := 0; attempt < 3; attempt++ {
+			diags = b.Diags.ForFile(uri)
+			if len(diags) > 0 {
+				break
+			}
+			select {
+			case <-time.After(500 * time.Millisecond):
+			case <-ctx.Done():
+				diags = nil // context cancelled, return empty
+			}
+			if ctx.Err() != nil {
+				break
+			}
+		}
 		if diags == nil {
 			diags = []protocol.Diagnostic{}
 		}

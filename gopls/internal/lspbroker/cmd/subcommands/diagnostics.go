@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"golang.org/x/tools/gopls/internal/lspbroker"
@@ -125,6 +126,9 @@ func RunDiagnostics(ctx context.Context, args []string, flags DiagnosticsFlags, 
 		}
 		uri := string(protocol.URIFromPath(absFile))
 		format.FormatDiagnostics(w, uri, diags, flags.JSON)
+		if len(diags) == 0 {
+			fmt.Fprintln(os.Stderr, "note: no diagnostics found. If this is a fresh session, gopls may still be loading. Retry in a few seconds.")
+		}
 	}
 
 	return 0, nil
