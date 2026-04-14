@@ -195,9 +195,11 @@ func parseQueryCommand(method string, args []string) (*goplscli.Request, error) 
 	if len(args) != 1 {
 		return nil, fmt.Errorf("usage: gopls cli %s QUERY", method)
 	}
+	dir, _ := os.Getwd()
 	return &goplscli.Request{
 		Method: method,
 		Query:  args[0],
+		Dir:    dir,
 	}, nil
 }
 
@@ -279,11 +281,13 @@ func printJSON(w io.Writer, resp *goplscli.Response, method string) int {
 	case "def", "refs", "impl":
 		data = resp.Locations
 		if len(resp.Locations) == 0 {
-			return 1 // empty result
+			fmt.Fprintf(os.Stderr, "no results for %s\n", method)
+			return 1
 		}
 	case "hover":
 		data = resp.Hover
 		if resp.Hover == nil {
+			fmt.Fprintln(os.Stderr, "no hover information at this position")
 			return 1
 		}
 	case "symbols":
@@ -310,6 +314,7 @@ func printText(w io.Writer, resp *goplscli.Response, method string) int {
 	switch method {
 	case "def", "refs", "impl":
 		if len(resp.Locations) == 0 {
+			fmt.Fprintf(os.Stderr, "no results for %s\n", method)
 			return 1
 		}
 		for _, loc := range resp.Locations {
@@ -317,6 +322,7 @@ func printText(w io.Writer, resp *goplscli.Response, method string) int {
 		}
 	case "hover":
 		if resp.Hover == nil {
+			fmt.Fprintln(os.Stderr, "no hover information at this position")
 			return 1
 		}
 		if resp.Hover.Signature != "" {

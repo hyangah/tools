@@ -20,8 +20,13 @@ import (
 func startTestServer(t *testing.T, c *cache.Cache) string {
 	t.Helper()
 
-	sockDir := t.TempDir()
-	addr := filepath.Join(sockDir, "cli.sock")
+	// Use a short socket path to avoid exceeding macOS's 104-byte limit.
+	sockDir, err := os.MkdirTemp("", "gs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	addr := filepath.Join(sockDir, "s.sock")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
@@ -187,6 +192,70 @@ func TestServeSymbols(t *testing.T) {
 	}
 	if len(resp.Symbols) < 2 {
 		t.Errorf("expected at least 2 symbols, got %d", len(resp.Symbols))
+	}
+}
+
+func TestServeWorkspaceSymbols(t *testing.T) {
+	root := testFiles(t)
+	c := cache.New(nil)
+	addr := startTestServer(t, c)
+
+	ctx := t.Context()
+	mainFile := filepath.Join(root, "main.go")
+
+	// Initialize a session by syncing a file first.
+	resp, err := goplscli.SendRequest(ctx, addr, &goplscli.Request{
+		Method: goplscli.MethodSync,
+		File:   mainFile,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("sync error: %s", resp.Error)
+	}
+
+	// Query workspace symbols for "Greeting".
+	resp, err = goplscli.SendRequest(ctx, addr, &goplscli.Request{
+		Method: goplscli.MethodWSymbols,
+		Query:  "Greeting",
+	})
+	if err != nil {
+		t.Fatalf("wsymbols: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("wsymbols error: %s", resp.Error)
+	}
+	t.Logf("WorkspaceSymbols: %d results", len(resp.WorkspaceSymbols))
+	for _, s := range resp.WorkspaceSymbols {
+		t.Logf("  %s (%s) %s:%d", s.Name, s.Kind, s.Location.File, s.Location.Start.Line)
+	}
+	if len(resp.WorkspaceSymbols) == 0 {
+		t.Error("expected at least 1 workspace symbol for 'Greeting'")
+	}
+}
+
+func TestServeWorkspaceSymbolsWithDir(t *testing.T) {
+	root := testFiles(t)
+	c := cache.New(nil)
+	addr := startTestServer(t, c)
+
+	ctx := t.Context()
+
+	// Query workspace symbols using Dir (no prior session exists).
+	resp, err := goplscli.SendRequest(ctx, addr, &goplscli.Request{
+		Method: goplscli.MethodWSymbols,
+		Query:  "Greeting",
+		Dir:    root,
+	})
+	if err != nil {
+		t.Fatalf("wsymbols: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("wsymbols error: %s", resp.Error)
+	}
+	if len(resp.WorkspaceSymbols) == 0 {
+		t.Error("expected at least 1 workspace symbol for 'Greeting'")
 	}
 }
 

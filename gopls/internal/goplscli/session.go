@@ -16,6 +16,7 @@ import (
 	filePkg "golang.org/x/tools/gopls/internal/file"
 	"golang.org/x/tools/gopls/internal/golang"
 	"golang.org/x/tools/gopls/internal/protocol"
+	"golang.org/x/tools/gopls/internal/settings"
 )
 
 // GoSession wraps a [cache.Session] for a single workspace root,
@@ -230,7 +231,10 @@ func (s *GoSession) WorkspaceSymbols(ctx context.Context, query string) ([]proto
 		}
 	}()
 
-	return golang.WorkspaceSymbols(ctx, snapshots, query, golang.WorkspaceSymbolsOptions{})
+	return golang.WorkspaceSymbols(ctx, snapshots, query, golang.WorkspaceSymbolsOptions{
+		Matcher: settings.SymbolFastFuzzy,
+		Style:   settings.DynamicSymbols,
+	})
 }
 
 // Rename renames the identifier at the given position.

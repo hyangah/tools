@@ -12,7 +12,7 @@ Connects to the gopls daemon (shared with your editor). No separate daemon to ma
 
 ## Commands
 
-**Navigate code:**
+**Navigate code (by position):**
 ```sh
 gopls cli def FILE:LINE:COL              # go to definition
 gopls cli refs FILE:LINE:COL             # find all references
@@ -22,9 +22,19 @@ gopls cli symbols FILE                   # list all symbols in a file
 gopls cli wsymbols "QUERY"               # search workspace for symbols
 ```
 
+**Navigate code (by symbol name — no position needed):**
+```sh
+gopls cli def SYMBOL --in FILE           # definition by name
+gopls cli def SYMBOL --in FILE:LINE      # disambiguate with line hint
+gopls cli refs SYMBOL --in FILE          # references by name
+gopls cli hover SYMBOL --in FILE         # hover by name
+gopls cli impl SYMBOL --in FILE          # implementations by name
+```
+
 **Edit safely:**
 ```sh
-gopls cli rename FILE:LINE:COL --to NEWNAME   # rename symbol
+gopls cli rename FILE:LINE:COL --to NEWNAME   # rename by position
+gopls cli rename SYMBOL --in FILE --to NEWNAME # rename by name
 ```
 
 **Check errors after edits:**

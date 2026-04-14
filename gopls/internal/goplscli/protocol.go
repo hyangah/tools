@@ -47,6 +47,10 @@ type Request struct {
 
 	// DryRun controls whether rename applies changes (false) or just reports them (true).
 	DryRun bool `json:"dryRun,omitempty"`
+
+	// Dir is the working directory hint (for workspace-wide queries like wsymbols
+	// when File is not set).
+	Dir string `json:"dir,omitempty"`
 }
 
 // Response is the wire type sent from daemon to CLI.

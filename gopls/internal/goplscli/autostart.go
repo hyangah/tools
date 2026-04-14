@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 )
@@ -63,21 +64,26 @@ func lspSocketPath(goplsPath string) string {
 	return filepath.Join(runtimeDir, fmt.Sprintf("%s-%s-daemon.%s", basename, shortHash, user))
 }
 
-// binaryHash returns a short hex hash derived from the binary's build-id
-// (or path as fallback), matching lsprpc's autoNetworkAddressPosix.
+// binaryHash returns a short hex hash identifying this binary build.
+//
+// It first tries debug.ReadBuildInfo (in-process, ~0 cost). If that
+// fails, it falls back to hashing the binary path.
+//
+// Note: lsprpc's autoNetworkAddressPosix uses `go tool buildid` which
+// spawns a subprocess (~90ms). We avoid that here because the CLI calls
+// this on every invocation. The hashes won't match lsprpc's, but they
+// don't need to — CLI and LSP use different socket name suffixes
+// ("-cli." vs "-daemon.").
 func binaryHash(goplsPath string) string {
-	h := sha256.New()
-	cmd := exec.Command("go", "tool", "buildid", goplsPath)
-	cmd.Stdout = h
-	var pathHash []byte
-	if err := cmd.Run(); err == nil {
-		pathHash = h.Sum(nil)
-	} else {
-		log.Printf("error getting current buildid: %v", err)
-		sum := sha256.Sum256([]byte(goplsPath))
-		pathHash = sum[:]
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		// Hash the full build info string — it includes Go version,
+		// module versions, and build settings (vcs.revision, etc.).
+		sum := sha256.Sum256([]byte(bi.String()))
+		return fmt.Sprintf("%x", sum[:])[:6]
 	}
-	return fmt.Sprintf("%x", pathHash)[:6]
+	log.Printf("debug.ReadBuildInfo unavailable, falling back to path hash")
+	sum := sha256.Sum256([]byte(goplsPath))
+	return fmt.Sprintf("%x", sum[:])[:6]
 }
 
 // AutoConnect connects to the CLI daemon at the default socket address.
@@ -131,7 +137,9 @@ func AutoConnect(ctx context.Context) (string, error) {
 	// Disconnect stdio so the daemon doesn't hold our stdin/stdout.
 	cmd.Stdin = nil
 	cmd.Stdout = nil
-	cmd.Stderr = nil
+	f, _ := os.Create("/tmp/gopls-daemon.log")
+	cmd.Stdout = f
+	cmd.Stderr = f
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("starting gopls daemon: %w", err)
 	}

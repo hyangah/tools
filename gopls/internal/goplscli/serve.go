@@ -286,16 +286,22 @@ func convertDocSymbols(symbols []protocol.DocumentSymbol, file string, mapper *p
 }
 
 func handleWSymbols(ctx context.Context, h *CLIHandler, req *Request) *Response {
-	// Workspace symbols need a session — use file if provided, otherwise
-	// any existing session.
+	// Workspace symbols need a session — use file if provided, then Dir,
+	// then any existing session.
 	var gs *GoSession
 	var err error
 	if req.File != "" {
 		gs, err = h.SessionForFile(ctx, req.File)
+	} else if req.Dir != "" {
+		root, rootErr := FindProjectRoot(req.Dir)
+		if rootErr != nil {
+			return &Response{Error: fmt.Sprintf("finding project root for %s: %v", req.Dir, rootErr)}
+		}
+		gs, err = h.SessionFor(ctx, root)
 	} else if roots := h.Roots(); len(roots) > 0 {
 		gs, err = h.SessionFor(ctx, roots[0])
 	} else {
-		return &Response{Error: "no workspace root available for wsymbols"}
+		return &Response{Error: "no workspace root available for wsymbols (pass a file or run from a Go project directory)"}
 	}
 	if err != nil {
 		return &Response{Error: err.Error()}
