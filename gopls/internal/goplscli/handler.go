@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"golang.org/x/tools/gopls/internal/cache"
 	"golang.org/x/tools/gopls/internal/protocol"
@@ -20,23 +21,46 @@ import (
 // GoSessions keyed by workspace root, sharing the gopls daemon's
 // [cache.Cache]. Safe for concurrent use.
 //
-// TODO: add idle timeout eviction — track last-access time per session
-// and periodically evict sessions with no recent activity. Currently
-// sessions accumulate until the daemon exits.
+// Idle sessions are automatically evicted after IdleTimeout of inactivity.
+// The evictor goroutine runs every EvictInterval and is stopped when
+// Close is called.
 type CLIHandler struct {
 	cache *cache.Cache
 
-	mu       sync.Mutex
-	sessions map[string]*GoSession   // keyed by workspace root
-	goenvs   map[string]*cache.GoEnv // cached FetchGoEnv results
+	closeOnce sync.Once
+	done      chan struct{} // closed by Close to stop the evictor
+
+	mu sync.Mutex
+	// IdleTimeout is how long a session can be idle before eviction.
+	// Zero means no idle eviction. Default: 15 minutes.
+	// Must be set before the first call to SessionFor or under mu.
+	IdleTimeout time.Duration
+	// EvictInterval is how often the evictor checks for idle sessions.
+	// Default: 60 seconds.
+	// Must be set before the first call to SessionFor or under mu.
+	EvictInterval time.Duration
+	sessions      map[string]*GoSession   // keyed by workspace root
+	goenvs        map[string]*cache.GoEnv // cached FetchGoEnv results
+	lastAccess    map[string]time.Time    // last access time per root
+	evictStarted  bool
 }
 
 // NewCLIHandler creates a CLIHandler backed by the given shared cache.
+// A background evictor goroutine is started on the first call to
+// SessionFor; it removes sessions idle for longer than IdleTimeout.
+// Call Close to stop the evictor.
+//
+// IdleTimeout and EvictInterval may be set after construction but
+// before the first SessionFor call.
 func NewCLIHandler(c *cache.Cache) *CLIHandler {
 	return &CLIHandler{
-		cache:    c,
-		sessions: make(map[string]*GoSession),
-		goenvs:   make(map[string]*cache.GoEnv),
+		cache:         c,
+		IdleTimeout:   15 * time.Minute,
+		EvictInterval: 60 * time.Second,
+		done:          make(chan struct{}),
+		sessions:      make(map[string]*GoSession),
+		goenvs:        make(map[string]*cache.GoEnv),
+		lastAccess:    make(map[string]time.Time),
 	}
 }
 
@@ -45,7 +69,12 @@ func NewCLIHandler(c *cache.Cache) *CLIHandler {
 // concurrently; at most one GoSession is created per root.
 func (h *CLIHandler) SessionFor(ctx context.Context, root string) (*GoSession, error) {
 	h.mu.Lock()
+	if !h.evictStarted {
+		h.evictStarted = true
+		go h.evictLoop()
+	}
 	if gs, ok := h.sessions[root]; ok {
+		h.lastAccess[root] = time.Now()
 		h.mu.Unlock()
 		return gs, nil
 	}
@@ -80,9 +109,11 @@ func (h *CLIHandler) SessionFor(ctx context.Context, root string) (*GoSession, e
 	// Double-check: another goroutine may have created it.
 	if existing, ok := h.sessions[root]; ok {
 		sess.Shutdown(ctx) // discard duplicate
+		h.lastAccess[root] = time.Now()
 		return existing, nil
 	}
 	h.sessions[root] = gs
+	h.lastAccess[root] = time.Now()
 	return gs, nil
 }
 
@@ -120,8 +151,11 @@ func (h *CLIHandler) SessionForFile(ctx context.Context, filePath string) (*GoSe
 	return h.SessionFor(ctx, root)
 }
 
-// Close shuts down all sessions in the pool.
+// Close shuts down all sessions in the pool and stops the evictor.
+// It is safe to call Close multiple times.
 func (h *CLIHandler) Close(ctx context.Context) {
+	h.closeOnce.Do(func() { close(h.done) })
+
 	h.mu.Lock()
 	sessions := make(map[string]*GoSession, len(h.sessions))
 	for k, v := range h.sessions {
@@ -129,6 +163,7 @@ func (h *CLIHandler) Close(ctx context.Context) {
 	}
 	h.sessions = make(map[string]*GoSession)
 	h.goenvs = make(map[string]*cache.GoEnv)
+	h.lastAccess = make(map[string]time.Time)
 	h.mu.Unlock()
 
 	for _, gs := range sessions {
@@ -172,6 +207,51 @@ func FindProjectRoot(filePath string) (string, error) {
 	return dir, nil
 }
 
+// evictLoop periodically checks for idle sessions and evicts them.
+// It runs until the done channel is closed.
+func (h *CLIHandler) evictLoop() {
+	h.mu.Lock()
+	interval := h.EvictInterval
+	h.mu.Unlock()
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-h.done:
+			return
+		case <-ticker.C:
+			h.evictIdle()
+		}
+	}
+}
+
+// evictIdle evicts all sessions that have been idle longer than IdleTimeout.
+func (h *CLIHandler) evictIdle() {
+	h.mu.Lock()
+	idleTimeout := h.IdleTimeout
+	if idleTimeout <= 0 {
+		h.mu.Unlock()
+		return
+	}
+	cutoff := time.Now().Add(-idleTimeout)
+	var stale []string
+	for root, t := range h.lastAccess {
+		if t.Before(cutoff) {
+			stale = append(stale, root)
+		}
+	}
+	h.mu.Unlock()
+
+	ctx := context.Background()
+	for _, root := range stale {
+		h.EvictSession(ctx, root)
+	}
+}
+
 // EvictSession removes a session from the pool. Used for idle cleanup.
 func (h *CLIHandler) EvictSession(ctx context.Context, root string) {
 	h.mu.Lock()
@@ -179,6 +259,7 @@ func (h *CLIHandler) EvictSession(ctx context.Context, root string) {
 	if ok {
 		delete(h.sessions, root)
 		delete(h.goenvs, root)
+		delete(h.lastAccess, root)
 	}
 	h.mu.Unlock()
 	if ok {

@@ -52,8 +52,13 @@ func startServer(t *testing.T) (string, string) {
 	t.Helper()
 	root := testFiles(t)
 	c := cache.New(nil)
-	sockDir := t.TempDir()
-	addr := filepath.Join(sockDir, "cli.sock")
+	// Use a short socket path to avoid exceeding macOS's 104-byte limit.
+	sockDir, err := os.MkdirTemp("", "gs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	addr := filepath.Join(sockDir, "s.sock")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
@@ -165,5 +170,33 @@ func TestCLIMissingArgs(t *testing.T) {
 	_, code := runCLI(t, addr, false, "def")
 	if code != 2 {
 		t.Errorf("expected exit code 2 for missing args, got %d", code)
+	}
+}
+
+func TestCLIDefinitionBySymbol(t *testing.T) {
+	addr, root := startServer(t)
+	mainFile := filepath.Join(root, "main.go")
+
+	out, code := runCLI(t, addr, false, "def", "Greeting", "--in", mainFile)
+	if code != 0 {
+		t.Fatalf("def by symbol exit %d: %s", code, out)
+	}
+	t.Logf("def by symbol output: %s", out)
+	if !strings.Contains(out, ":6:") {
+		t.Errorf("expected definition at line 6, got: %s", out)
+	}
+}
+
+func TestCLIDefSymbolLine(t *testing.T) {
+	addr, root := startServer(t)
+	mainFile := filepath.Join(root, "main.go")
+
+	out, code := runCLI(t, addr, false, "def", "Greeting", "--in", mainFile+":6")
+	if code != 0 {
+		t.Fatalf("def by symbol with line exit %d: %s", code, out)
+	}
+	t.Logf("def by symbol with line output: %s", out)
+	if !strings.Contains(out, ":6:") {
+		t.Errorf("expected definition at line 6, got: %s", out)
 	}
 }

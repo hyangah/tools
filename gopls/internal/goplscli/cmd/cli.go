@@ -81,36 +81,97 @@ func Run(ctx context.Context, address string, jsonOutput bool, args []string, w 
 	return printText(w, resp, sub)
 }
 
-// parsePosCommand parses `<command> FILE:LINE:COL` or `<command> --in FILE:LINE:COL`.
+// parsePosCommand parses position-based and name-based queries:
+//
+//   - Positional: `<command> FILE:LINE:COL`
+//   - Name-based: `<command> SYMBOL --in FILE` or `<command> SYMBOL --in FILE:LINE`
+//
+// If the positional argument doesn't parse as FILE:LINE:COL (fewer than two
+// colons with numeric suffixes), it is treated as a symbol name and --in is
+// required to specify the file.
 func parsePosCommand(method string, args []string) (*goplscli.Request, error) {
-	var fileSpec string
+	var positional string
+	var inSpec string
 
-	// Support both `def FILE:LINE:COL` and `def --in FILE:LINE:COL`.
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--in" && i+1 < len(args) {
-			fileSpec = args[i+1]
+			inSpec = args[i+1]
 			i++
 		} else if !strings.HasPrefix(args[i], "-") {
-			if fileSpec != "" {
-				return nil, fmt.Errorf("multiple file arguments")
+			if positional != "" {
+				return nil, fmt.Errorf("multiple positional arguments")
 			}
-			fileSpec = args[i]
+			positional = args[i]
 		}
 	}
-	if fileSpec == "" {
-		return nil, fmt.Errorf("usage: gopls cli %s FILE:LINE:COL", method)
+	if positional == "" {
+		return nil, fmt.Errorf("usage: gopls cli %s FILE:LINE:COL  or  gopls cli %s SYMBOL --in FILE", method, method)
 	}
 
-	file, line, col, err := parseFileLineCol(fileSpec)
+	// Try to parse as FILE:LINE:COL first.
+	if inSpec == "" {
+		parts := splitFileLineCol(positional)
+		if len(parts) == 3 {
+			if _, err1 := strconv.Atoi(parts[1]); err1 == nil {
+				if _, err2 := strconv.Atoi(parts[2]); err2 == nil {
+					// Valid FILE:LINE:COL.
+					file, line, col, err := parseFileLineCol(positional)
+					if err != nil {
+						return nil, err
+					}
+					return &goplscli.Request{
+						Method: method,
+						File:   file,
+						Line:   line,
+						Column: col,
+					}, nil
+				}
+			}
+		}
+		// Not FILE:LINE:COL — treat as symbol name, but --in is required.
+		return nil, fmt.Errorf("usage: gopls cli %s SYMBOL --in FILE", method)
+	}
+
+	// Name-based: positional is the symbol name, inSpec is FILE or FILE:LINE.
+	symbolName := positional
+	parts := splitFileLineCol(inSpec)
+
+	var filePath string
+	var line int
+	var err error
+
+	switch len(parts) {
+	case 1:
+		// Just FILE.
+		filePath = parts[0]
+	case 2:
+		// FILE:LINE for disambiguation.
+		filePath = parts[0]
+		line, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid line number %q in %q", parts[1], inSpec)
+		}
+	case 3:
+		// FILE:LINE:COL — valid but we only use file and line for symbol resolution.
+		filePath = parts[0]
+		line, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid line number %q in %q", parts[1], inSpec)
+		}
+	default:
+		return nil, fmt.Errorf("invalid file spec %q", inSpec)
+	}
+
+	filePath, err = filepath.Abs(filePath)
 	if err != nil {
 		return nil, err
 	}
 
 	return &goplscli.Request{
 		Method: method,
-		File:   file,
+		File:   filePath,
+		Symbol: symbolName,
 		Line:   line,
-		Column: col,
 	}, nil
 }
 

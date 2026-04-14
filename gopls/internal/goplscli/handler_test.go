@@ -5,18 +5,18 @@
 package goplscli_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/tools/gopls/internal/cache"
 	"golang.org/x/tools/gopls/internal/goplscli"
 )
 
 func TestCLIHandlerSessionFor(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := testFiles(t)
 	c := cache.New(nil)
 	h := goplscli.NewCLIHandler(c)
@@ -44,7 +44,7 @@ func TestCLIHandlerSessionFor(t *testing.T) {
 }
 
 func TestCLIHandlerSessionForFile(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := testFiles(t)
 	c := cache.New(nil)
 	h := goplscli.NewCLIHandler(c)
@@ -61,7 +61,7 @@ func TestCLIHandlerSessionForFile(t *testing.T) {
 }
 
 func TestCLIHandlerConcurrentSessionFor(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := testFiles(t)
 	c := cache.New(nil)
 	h := goplscli.NewCLIHandler(c)
@@ -97,7 +97,7 @@ func TestCLIHandlerConcurrentSessionFor(t *testing.T) {
 }
 
 func TestCLIHandlerEvictSession(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := testFiles(t)
 	c := cache.New(nil)
 	h := goplscli.NewCLIHandler(c)
@@ -147,7 +147,7 @@ func TestFindProjectRoot(t *testing.T) {
 }
 
 func TestCLIHandlerRoots(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := testFiles(t)
 	c := cache.New(nil)
 	h := goplscli.NewCLIHandler(c)
@@ -168,5 +168,31 @@ func TestCLIHandlerRoots(t *testing.T) {
 	}
 	if roots[0] != root {
 		t.Errorf("root = %q, want %q", roots[0], root)
+	}
+}
+
+func TestIdleTimeout(t *testing.T) {
+	ctx := t.Context()
+	root := testFiles(t)
+	c := cache.New(nil)
+	h := goplscli.NewCLIHandler(c)
+	h.IdleTimeout = 100 * time.Millisecond
+	h.EvictInterval = 50 * time.Millisecond
+	t.Cleanup(func() { h.Close(ctx) })
+
+	gs1, err := h.SessionFor(ctx, root)
+	if err != nil {
+		t.Fatalf("SessionFor: %v", err)
+	}
+
+	// Wait long enough for the session to become idle and be evicted.
+	time.Sleep(200 * time.Millisecond)
+
+	gs2, err := h.SessionFor(ctx, root)
+	if err != nil {
+		t.Fatalf("SessionFor after eviction: %v", err)
+	}
+	if gs2 == gs1 {
+		t.Error("expected a new session after idle eviction, got the same one")
 	}
 }

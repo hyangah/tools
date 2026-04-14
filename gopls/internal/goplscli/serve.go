@@ -133,15 +133,23 @@ func handleLocations(ctx context.Context, h *CLIHandler, req *Request, method st
 
 	uri := protocol.URIFromPath(req.File)
 
-	// Get mapper for position conversion.
-	mapper, err := mapperForURI(ctx, gs, uri)
-	if err != nil {
-		return &Response{Error: err.Error()}
-	}
+	var rng protocol.Range
+	if req.Symbol != "" {
+		_, rng, err = ResolveSymbol(ctx, gs, req.File, req.Symbol, req.Line)
+		if err != nil {
+			return &Response{Error: err.Error()}
+		}
+	} else {
+		// Get mapper for position conversion.
+		mapper, err := mapperForURI(ctx, gs, uri)
+		if err != nil {
+			return &Response{Error: err.Error()}
+		}
 
-	// Convert CLI position to protocol position.
-	pos := CLIToProtocol(mapper, CLIPosition{Line: req.Line, Column: req.Column})
-	rng := protocol.Range{Start: pos, End: pos}
+		// Convert CLI position to protocol position.
+		pos := CLIToProtocol(mapper, CLIPosition{Line: req.Line, Column: req.Column})
+		rng = protocol.Range{Start: pos, End: pos}
+	}
 
 	var locs []protocol.Location
 	switch method {
@@ -184,13 +192,22 @@ func handleHover(ctx context.Context, h *CLIHandler, req *Request) *Response {
 	}
 
 	uri := protocol.URIFromPath(req.File)
-	mapper, err := mapperForURI(ctx, gs, uri)
-	if err != nil {
-		return &Response{Error: err.Error()}
-	}
 
-	pos := CLIToProtocol(mapper, CLIPosition{Line: req.Line, Column: req.Column})
-	rng := protocol.Range{Start: pos, End: pos}
+	var rng protocol.Range
+	if req.Symbol != "" {
+		_, rng, err = ResolveSymbol(ctx, gs, req.File, req.Symbol, req.Line)
+		if err != nil {
+			return &Response{Error: err.Error()}
+		}
+	} else {
+		mapper, err := mapperForURI(ctx, gs, uri)
+		if err != nil {
+			return &Response{Error: err.Error()}
+		}
+
+		pos := CLIToProtocol(mapper, CLIPosition{Line: req.Line, Column: req.Column})
+		rng = protocol.Range{Start: pos, End: pos}
+	}
 
 	hover, err := gs.Hover(ctx, uri, rng)
 	if err != nil {
@@ -352,13 +369,22 @@ func handleRename(ctx context.Context, h *CLIHandler, req *Request) *Response {
 	}
 
 	uri := protocol.URIFromPath(req.File)
-	mapper, err := mapperForURI(ctx, gs, uri)
-	if err != nil {
-		return &Response{Error: err.Error()}
-	}
 
-	pos := CLIToProtocol(mapper, CLIPosition{Line: req.Line, Column: req.Column})
-	rng := protocol.Range{Start: pos, End: pos}
+	var rng protocol.Range
+	if req.Symbol != "" {
+		_, rng, err = ResolveSymbol(ctx, gs, req.File, req.Symbol, req.Line)
+		if err != nil {
+			return &Response{Error: err.Error()}
+		}
+	} else {
+		mapper, err := mapperForURI(ctx, gs, uri)
+		if err != nil {
+			return &Response{Error: err.Error()}
+		}
+
+		pos := CLIToProtocol(mapper, CLIPosition{Line: req.Line, Column: req.Column})
+		rng = protocol.Range{Start: pos, End: pos}
+	}
 
 	changes, err := gs.Rename(ctx, uri, rng, req.NewName)
 	if err != nil {

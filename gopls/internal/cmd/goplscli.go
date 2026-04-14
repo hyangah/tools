@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 
+	"golang.org/x/tools/gopls/internal/goplscli"
 	clicmd "golang.org/x/tools/gopls/internal/goplscli/cmd"
 )
 
@@ -55,9 +56,12 @@ cli-flags:
 func (c *goplsCLI) Run(ctx context.Context, args ...string) error {
 	address := c.Address
 	if address == "" {
-		// TODO: auto-detect daemon socket address.
-		fmt.Fprintln(os.Stderr, "error: --address is required (daemon auto-start not yet implemented)")
-		os.Exit(2)
+		var err error
+		address, err = goplscli.AutoConnect(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(4)
+		}
 	}
 
 	exitCode := clicmd.Run(ctx, address, c.JSON, args, os.Stdout)
