@@ -70,7 +70,9 @@ func (s *GoSession) nextVersion() int32 {
 // It tracks open state to avoid the "modifying unopened overlay" error,
 // and uses mtime+size fingerprints to skip unchanged files.
 //
-// The mutex is held across the entire operation to prevent TOCTOU races.
+// os.Stat is called outside the lock to reduce contention. The content
+// read, fingerprint update, and overlay push are atomic under the lock.
+// A concurrent Stat may cause one redundant re-read but not stale data.
 func (s *GoSession) EnsureSynced(ctx context.Context, filePath string) error {
 	uri := protocol.URIFromPath(filePath)
 
@@ -119,6 +121,14 @@ func (s *GoSession) EnsureSynced(ctx context.Context, filePath string) error {
 func (s *GoSession) ForceSync(ctx context.Context, filePath string) error {
 	uri := protocol.URIFromPath(filePath)
 
+	// Stat before reading so the fingerprint matches the content we send.
+	// A small TOCTOU window remains (file can change between Stat and
+	// ReadFile), but the fingerprint will match the Stat — a subsequent
+	// EnsureSynced will detect the newer mtime and re-read.
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", filePath, err)
+	}
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", filePath, err)
@@ -143,13 +153,7 @@ func (s *GoSession) ForceSync(ctx context.Context, filePath string) error {
 		return fmt.Errorf("sync %s: %w", filePath, err)
 	}
 	s.opened[uri] = true
-
-	// Update fingerprint.
-	if info, err := os.Stat(filePath); err == nil {
-		s.fingerprints[uri] = fileFingerprint{mtime: info.ModTime(), size: info.Size()}
-	} else {
-		delete(s.fingerprints, uri)
-	}
+	s.fingerprints[uri] = fileFingerprint{mtime: info.ModTime(), size: info.Size()}
 	return nil
 }
 

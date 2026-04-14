@@ -19,6 +19,10 @@ import (
 // CLIHandler manages CLI protocol connections. It maintains a pool of
 // GoSessions keyed by workspace root, sharing the gopls daemon's
 // [cache.Cache]. Safe for concurrent use.
+//
+// TODO: add idle timeout eviction — track last-access time per session
+// and periodically evict sessions with no recent activity. Currently
+// sessions accumulate until the daemon exits.
 type CLIHandler struct {
 	cache *cache.Cache
 

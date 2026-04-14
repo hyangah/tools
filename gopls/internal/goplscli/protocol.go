@@ -150,11 +150,6 @@ func diagnosticSeverityString(s protocol.DiagnosticSeverity) string {
 	}
 }
 
-// cacheDiagnosticSeverityString converts a cache diagnostic severity.
-func cacheDiagnosticSeverityString(s protocol.DiagnosticSeverity) string {
-	return diagnosticSeverityString(s)
-}
-
 // symbolKindString converts a protocol.SymbolKind to a human-readable string.
 func symbolKindString(k protocol.SymbolKind) string {
 	switch k {
@@ -216,7 +211,7 @@ func convertCacheDiag(d *cache.Diagnostic, mapper *protocol.Mapper) DiagnosticRe
 		Column:   startPos.Column,
 		EndLine:  endPos.Line,
 		EndCol:   endPos.Column,
-		Severity: cacheDiagnosticSeverityString(d.Severity),
+		Severity: diagnosticSeverityString(d.Severity),
 		Message:  d.Message,
 		Source:   string(d.Source),
 	}

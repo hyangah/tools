@@ -76,7 +76,9 @@ func serveConn(ctx context.Context, handler *CLIHandler, conn net.Conn) {
 	}
 
 	resp := dispatch(ctx, handler, req)
-	writeResponse(conn, resp)
+	if err := writeResponse(conn, resp); err != nil {
+		log.Printf("goplscli: write response: %v", err)
+	}
 }
 
 // dispatch routes a request to the appropriate handler method.
@@ -159,10 +161,12 @@ func handleLocations(ctx context.Context, h *CLIHandler, req *Request, method st
 	for _, loc := range locs {
 		m, err := mapperForURI(ctx, gs, loc.URI)
 		if err != nil {
-			continue // skip locations we can't resolve
+			log.Printf("goplscli: skipping location %s: %v", loc.URI, err)
+			continue
 		}
 		cl, err := LocationToCLI(m, loc)
 		if err != nil {
+			log.Printf("goplscli: position conversion for %s: %v", loc.URI, err)
 			continue
 		}
 		cliLocs = append(cliLocs, cl)
@@ -196,7 +200,10 @@ func handleHover(ctx context.Context, h *CLIHandler, req *Request) *Response {
 		return &Response{} // no hover info
 	}
 
-	// Parse the hover content.
+	// Parse gopls's hover markdown format: ```go\nsig\n``` \n---\n doc \n---\n link.
+	// This is coupled to golang.Hover's internal formatting. If gopls changes
+	// the hover format, this parsing will produce degraded (but not incorrect)
+	// output — the raw markdown falls through to Signature.
 	result := &HoverResult{}
 	content := hover.Contents.Value
 	// gopls returns markdown with signature in a code block, then doc.
