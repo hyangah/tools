@@ -43,6 +43,10 @@ type Serve struct {
 	// MCP Server related configurations.
 	MCPAddress string `flag:"mcp.listen" help:"experimental: address on which to listen for model context protocol connections. If port is localhost:0, pick a random port in localhost instead."`
 
+	// Session pool enables session reuse across LSP connections.
+	SessionPool        bool          `flag:"session.pool" help:"experimental: enable session reuse across LSP connections for faster agent/CLI queries"`
+	SessionIdleTimeout time.Duration `flag:"session.idle" help:"when used with -session.pool, evict idle sessions after this duration"`
+
 	app *Application
 }
 
@@ -75,6 +79,12 @@ func (s *Serve) remoteArgs(network, address string) []string {
 	}
 	if s.RemoteLogfile != "" {
 		args = append(args, "-logfile", s.RemoteLogfile)
+	}
+	if s.SessionPool {
+		args = append(args, "-session.pool")
+		if s.SessionIdleTimeout != 0 {
+			args = append(args, "-session.idle", s.SessionIdleTimeout.String())
+		}
 	}
 	return args
 }
@@ -110,6 +120,9 @@ func (s *Serve) Run(ctx context.Context, args ...string) error {
 		}
 	} else {
 		lsprpcServer := lsprpc.NewStreamServer(cache.New(nil), isDaemon, s.app.options)
+		if s.SessionPool {
+			lsprpcServer.EnableSessionPool(s.SessionIdleTimeout)
+		}
 		ss = lsprpcServer
 		if s.MCPAddress != "" {
 			sessions = lsprpcServer
