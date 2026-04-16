@@ -37,6 +37,16 @@ import (
 	"golang.org/x/tools/internal/event"
 )
 
+// SessionSwapHook is called at the start of addFolders to optionally swap
+// the server's session for a pooled one. If the hook returns a non-nil
+// session, the server's session is replaced and releaseFunc is called when
+// the server shuts down (instead of session.Shutdown). If the hook returns
+// nil, the server proceeds with its original session.
+//
+// The hook receives the workspace folders from the initialize request, which
+// it can use to determine the pool key.
+type SessionSwapHook func(ctx context.Context, folders []protocol.WorkspaceFolder) (session *cache.Session, releaseFunc func())
+
 // New creates an LSP server and binds it to handle incoming client
 // messages on the supplied stream.
 func New(session *cache.Session, client protocol.ClientCloser, options *settings.Options) protocol.Server {
@@ -55,6 +65,13 @@ func New(session *cache.Session, client protocol.ClientCloser, options *settings
 		options:             options,
 		viewsToDiagnose:     make(map[*cache.View]uint64),
 	}
+}
+
+// SetSessionSwapHook sets the hook called during addFolders to potentially
+// swap the server's session for a pooled one. It must be called before
+// the server processes any requests.
+func SetSessionSwapHook(s protocol.Server, hook SessionSwapHook) {
+	s.(*server).sessionSwapHook = hook
 }
 
 type serverState int
@@ -94,6 +111,15 @@ type server struct {
 	notifications []*protocol.ShowMessageParams
 
 	session *cache.Session
+
+	// sessionSwapHook, if set, is called at the start of addFolders to
+	// optionally swap the session for a pooled one. See SessionSwapHook.
+	sessionSwapHook SessionSwapHook
+
+	// onShutdown, if set, is called instead of session.Shutdown during
+	// server Shutdown. Used to release a pooled session back to the pool
+	// rather than destroying it.
+	onShutdown func()
 
 	// changedFiles tracks files for which there has been a textDocument/didChange.
 	changedFilesMu sync.Mutex
