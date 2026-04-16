@@ -1,0 +1,29 @@
+agent-friendly code intelligence CLI
+
+Usage:
+  gopls [flags] cli [cli-flags] <command> [args]
+
+Agent-friendly Go code intelligence powered by the gopls daemon.
+Supports symbol-based lookup and terse output for AI agents.
+
+Commands:
+  def       Find definition (FILE:LINE:COL or SYMBOL --in FILE)
+  refs      Find references
+  hover     Show type and documentation
+  impl      Find implementations
+  symbols   List symbols in a file
+  wsymbols  Search workspace symbols
+  rename    Rename a symbol (FILE:LINE:COL --to NEWNAME)
+
+Examples:
+  $ gopls cli def ./main.go:10:5
+  $ gopls cli def Parse --in ./parser.go
+  $ gopls cli refs NewSession --in ./session.go
+  $ gopls cli hover ./cache/session.go:39:6
+  $ gopls cli symbols ./session.go
+  $ gopls cli wsymbols NewSession
+  $ gopls cli rename ./session.go:39:6 --to CreateSession
+
+cli-flags:
+  -json
+    	output results as JSON

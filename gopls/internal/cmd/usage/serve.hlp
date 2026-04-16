@@ -30,3 +30,7 @@ server-flags:
     	when used with -remote=auto, the -logfile value used to start the daemon
   -rpc.trace
     	print the full rpc trace in lsp inspector format
+  -session.idle=duration
+    	when used with -session.pool, evict idle sessions after this duration
+  -session.pool
+    	experimental: enable session reuse across LSP connections for faster agent/CLI queries
