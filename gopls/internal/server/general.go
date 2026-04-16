@@ -317,6 +317,17 @@ func go1Point() int {
 // may report an error to the client over LSP if one or more folders
 // had problems, for example, folders with unsupported file system.
 func (s *server) addFolders(ctx context.Context, folders []protocol.WorkspaceFolder) {
+	// If a session swap hook is set, try to swap to a pooled session.
+	// This must happen before any Views are created on the temporary session.
+	if s.sessionSwapHook != nil {
+		if pooledSession, releaseFunc := s.sessionSwapHook(ctx, folders); pooledSession != nil {
+			oldSession := s.session
+			s.session = pooledSession
+			s.onShutdown = releaseFunc
+			oldSession.Shutdown(ctx) // cheap: no Views on the temporary session
+		}
+	}
+
 	originalViews := len(s.session.Views())
 	viewErrors := make(map[protocol.URI]error)
 
@@ -730,8 +741,14 @@ func (s *server) Shutdown(ctx context.Context) error {
 			s.web.server.Shutdown(ctx) // ignore error
 		}
 
-		// drop all the active views
-		s.session.Shutdown(ctx)
+		if s.onShutdown != nil {
+			// The session is pooled; release it back to the pool
+			// instead of destroying it.
+			s.onShutdown()
+		} else {
+			// drop all the active views
+			s.session.Shutdown(ctx)
+		}
 		s.state = serverShutDown
 	}
 	return nil
