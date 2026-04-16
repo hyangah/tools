@@ -202,7 +202,6 @@ type server struct {
 	// See proposal §3.1, §4.
 	wantsPushDiagnostics bool
 
-
 	// changedFiles tracks files for which there has been a textDocument/didChange.
 	changedFilesMu sync.Mutex
 	changedFiles   map[protocol.DocumentURI]unit

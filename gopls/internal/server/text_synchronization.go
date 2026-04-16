@@ -218,6 +218,28 @@ func (s *server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	}, FromDidClose)
 }
 
+// shouldComputeDiagnostics reports whether the modification-triggered
+// diagnose goroutine should run. The answer is no only when pooling is
+// enabled and no attached connection wants push-model publishDiagnostics;
+// in that case Stage 3d's pull path (or a future attach) drives any
+// compute that's actually needed.
+//
+// Non-pooled servers always compute — the current connection is the only
+// sink for publishDiagnostics, and skipping compute would silently drop
+// the IDE use case. See proposal §3.1.
+//
+// The read is intentionally unsynchronized. A subscriber count change
+// racing a modification is safe either way: we either compute-and-publish
+// to a subscriber that's about to detach (benign — the publish is dropped
+// at pipe close), or skip-and-don't-publish to a subscriber that just
+// attached (the next modification, or Stage 3d's pull, settles it).
+func (s *server) shouldComputeDiagnostics() bool {
+	if s.poolEntry == nil {
+		return true
+	}
+	return s.poolEntry.HasPushSubscribers()
+}
+
 func (s *server) didModifyFiles(ctx context.Context, modifications []file.Modification, cause ModificationSource) error {
 	// Something happened. Wake up a quiescent file watcher.
 	if s.poolEntry != nil {
@@ -277,16 +299,24 @@ func (s *server) didModifyFiles(ctx context.Context, modifications []file.Modifi
 		s.mustPublishDiagnostics(mod.URI)
 	}
 
-	modCtx, modID := s.needsDiagnosis(ctx, viewsToDiagnose)
-
-	wg.Go(func() {
-		s.diagnoseChangedViews(modCtx, modID, viewsToDiagnose, cause)
-	})
+	// Compute gate: skip the workspace diagnostic pass when no attached
+	// connection wants push-model publishDiagnostics (and, once Stage 3d
+	// lands, no pull is pending). This replaces the provisional poolHit
+	// bypass: pool-hit is no longer a sufficient reason to skip compute,
+	// because an IDE attached to a pool-hit session still needs
+	// publishDiagnostics. See proposal §3.1.
+	if s.shouldComputeDiagnostics() {
+		modCtx, modID := s.needsDiagnosis(ctx, viewsToDiagnose)
+		wg.Go(func() {
+			s.diagnoseChangedViews(modCtx, modID, viewsToDiagnose, cause)
+		})
+	}
 
 	// After any file modifications, we need to update our watched files,
 	// in case something changed. Compute the new set of directories to watch,
 	// and if it differs from the current set, send updated registrations.
-	return s.updateWatchedDirectories(ctx)
+	err = s.updateWatchedDirectories(ctx)
+	return err
 }
 
 func (s *server) handleModuleChanges(ctx context.Context, modifications []file.Modification, cause ModificationSource) {
