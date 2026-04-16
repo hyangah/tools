@@ -405,8 +405,13 @@ func (f *forwarder) handshake(ctx context.Context) {
 	)
 }
 
-func ConnectToRemote(ctx context.Context, addr string) (net.Conn, error) {
-	dialer, err := newAutoDialer(addr, nil)
+// ConnectToRemote connects to a remote gopls daemon at addr.
+// If argFunc is non-nil and addr is an 'auto' address, a daemon is
+// auto-spawned at the resolved socket when no existing daemon is found.
+// argFunc is called with the resolved network and address and must return
+// the argv for the daemon process (excluding the executable itself).
+func ConnectToRemote(ctx context.Context, addr string, argFunc func(network, addr string) []string) (net.Conn, error) {
+	dialer, err := newAutoDialer(addr, argFunc)
 	if err != nil {
 		return nil, err
 	}

@@ -329,7 +329,7 @@ func (app *Application) connect(ctx context.Context) (*client, *cache.Session, e
 		ctx = protocol.WithClient(ctx, client)
 	} else {
 		// remote
-		netConn, err := lsprpc.ConnectToRemote(ctx, app.Remote)
+		netConn, err := lsprpc.ConnectToRemote(ctx, app.Remote, daemonArgs)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -345,6 +345,19 @@ func (app *Application) connect(ctx context.Context) (*client, *cache.Session, e
 		return nil, nil, err
 	}
 	return client, sess, nil
+}
+
+// daemonArgs returns the argv for an auto-spawned gopls daemon.
+// It is used as the argFunc passed to lsprpc.ConnectToRemote when -remote=auto
+// is in effect and no existing daemon is found at the resolved socket.
+// -session.pool is always included so the daemon benefits from session reuse.
+func daemonArgs(network, address string) []string {
+	return []string{
+		"serve",
+		"-listen", fmt.Sprintf("%s;%s", network, address),
+		"-session.pool",
+		"-logfile", "auto",
+	}
 }
 
 func initParams(rootDir string, opts *settings.Options) *protocol.ParamInitialize {
