@@ -222,7 +222,8 @@ func (s *Snapshot) forEachPackage(ctx context.Context, ids []PackageID, pre preT
 		post(indexes[i], pkg)
 	}
 
-	return b.query(ctx, needIDs, pre2, post2, handles)
+	err = b.query(ctx, needIDs, pre2, post2, handles)
+	return err
 }
 
 // acquireTypeChecking joins or starts a concurrent type checking batch.
