@@ -232,13 +232,7 @@ func runSymbols(ctx context.Context, server protocol.Server, args []string) ([]p
 	if err != nil {
 		return nil, err
 	}
-	var symbols []protocol.DocumentSymbol
-	for _, item := range result {
-		if ds, ok := item.(protocol.DocumentSymbol); ok {
-			symbols = append(symbols, ds)
-		}
-	}
-	return symbols, nil
+	return goplscli.DecodeDocumentSymbols(result)
 }
 
 // runWSymbols runs workspace/symbol.
@@ -302,14 +296,34 @@ func printText(w io.Writer, sub string, result any) {
 		}
 	case "rename":
 		edit := result.(*protocol.WorkspaceEdit)
-		for uri, edits := range edit.Changes {
-			fmt.Fprintf(w, "%s:\n", uri.Path())
-			for _, e := range edits {
-				fmt.Fprintf(w, "  %d:%d-%d:%d → %q\n",
-					e.Range.Start.Line+1, e.Range.Start.Character+1,
-					e.Range.End.Line+1, e.Range.End.Character+1,
-					e.NewText)
-			}
+		printRenameEdit(w, edit)
+	}
+}
+
+// printRenameEdit prints a WorkspaceEdit returned by textDocument/rename.
+// gopls always populates DocumentChanges (the modern field), regardless of
+// client capability — so we read from there rather than the legacy Changes map.
+func printRenameEdit(w io.Writer, edit *protocol.WorkspaceEdit) {
+	for _, c := range edit.DocumentChanges {
+		if c.TextDocumentEdit == nil {
+			continue
+		}
+		uri := c.TextDocumentEdit.TextDocument.URI
+		fmt.Fprintf(w, "%s:\n", uri.Path())
+		for _, e := range protocol.AsTextEdits(c.TextDocumentEdit.Edits) {
+			fmt.Fprintf(w, "  %d:%d-%d:%d → %q\n",
+				e.Range.Start.Line+1, e.Range.Start.Character+1,
+				e.Range.End.Line+1, e.Range.End.Character+1,
+				e.NewText)
+		}
+	}
+	for uri, edits := range edit.Changes {
+		fmt.Fprintf(w, "%s:\n", uri.Path())
+		for _, e := range edits {
+			fmt.Fprintf(w, "  %d:%d-%d:%d → %q\n",
+				e.Range.Start.Line+1, e.Range.Start.Character+1,
+				e.Range.End.Line+1, e.Range.End.Character+1,
+				e.NewText)
 		}
 	}
 }
