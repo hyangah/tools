@@ -1095,12 +1095,21 @@ func someFunctionName()
 
 // -- test framework --
 
+// daemonShutdownHook is set by cli_test.go when a shared test daemon is
+// started. TestMain invokes it after all tests finish so the daemon process
+// is reaped and its unix socket is removed.
+var daemonShutdownHook func()
+
 func TestMain(m *testing.M) {
 	switch os.Getenv("ENTRYPOINT") {
 	case "goplsMain":
 		goplsMain()
 	default:
-		os.Exit(m.Run())
+		code := m.Run()
+		if daemonShutdownHook != nil {
+			daemonShutdownHook()
+		}
+		os.Exit(code)
 	}
 }
 

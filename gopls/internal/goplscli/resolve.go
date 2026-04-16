@@ -6,11 +6,44 @@ package goplscli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"golang.org/x/tools/gopls/internal/protocol"
 )
+
+// DecodeDocumentSymbols converts the heterogeneous []any returned by
+// server.DocumentSymbol into typed DocumentSymbol values.
+//
+// When the LSP response crosses a JSON-RPC boundary (e.g. -remote=auto),
+// each item arrives as map[string]any rather than the concrete type, so a
+// direct type assertion to protocol.DocumentSymbol fails. This helper
+// re-marshals such maps and ignores SymbolInformation entries (which gopls
+// only emits to clients without HierarchicalDocumentSymbolSupport).
+func DecodeDocumentSymbols(items []any) ([]protocol.DocumentSymbol, error) {
+	var out []protocol.DocumentSymbol
+	for _, item := range items {
+		switch v := item.(type) {
+		case protocol.DocumentSymbol:
+			out = append(out, v)
+		case map[string]any:
+			if _, ok := v["selectionRange"]; !ok {
+				continue // SymbolInformation, not a DocumentSymbol
+			}
+			b, err := json.Marshal(v)
+			if err != nil {
+				return nil, err
+			}
+			var ds protocol.DocumentSymbol
+			if err := json.Unmarshal(b, &ds); err != nil {
+				return nil, err
+			}
+			out = append(out, ds)
+		}
+	}
+	return out, nil
+}
 
 // ResolveSymbol finds the position of a named symbol in the given file
 // by querying textDocument/documentSymbol via the LSP server.
@@ -25,12 +58,9 @@ func ResolveSymbol(ctx context.Context, server protocol.Server, filePath string,
 		return "", protocol.Range{}, fmt.Errorf("document symbols: %w", err)
 	}
 
-	// Extract DocumentSymbols from the result.
-	var symbols []protocol.DocumentSymbol
-	for _, item := range result {
-		if ds, ok := item.(protocol.DocumentSymbol); ok {
-			symbols = append(symbols, ds)
-		}
+	symbols, err := DecodeDocumentSymbols(result)
+	if err != nil {
+		return "", protocol.Range{}, fmt.Errorf("decode document symbols: %w", err)
 	}
 
 	// Collect all matching symbols by walking the tree.
