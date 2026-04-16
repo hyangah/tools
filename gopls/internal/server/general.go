@@ -405,6 +405,14 @@ func (s *server) addFolders(ctx context.Context, folders []protocol.WorkspaceFol
 	// (We don't need to wait for diagnosis to finish.)
 	nsnapshots.Wait()
 
+	// If a post-init hook is set, call it now that Views are warm.
+	// This is used by the session pool to register newly-created sessions.
+	if s.postInitHook != nil && s.onShutdown == nil {
+		if releaseFunc := s.postInitHook(ctx, s.session, folders); releaseFunc != nil {
+			s.onShutdown = releaseFunc
+		}
+	}
+
 	// Register for file watching notifications, if they are supported.
 	if err := s.updateWatchedDirectories(ctx); err != nil {
 		event.Error(ctx, "failed to register for file watching notifications", err)

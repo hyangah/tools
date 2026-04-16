@@ -47,6 +47,12 @@ import (
 // it can use to determine the pool key.
 type SessionSwapHook func(ctx context.Context, folders []protocol.WorkspaceFolder) (session *cache.Session, releaseFunc func())
 
+// PostInitHook is called at the end of addFolders, after Views have been
+// created (or found to already exist). It receives the server's current
+// session and workspace folders. Used by the session pool to register
+// newly-initialized sessions on pool miss.
+type PostInitHook func(ctx context.Context, session *cache.Session, folders []protocol.WorkspaceFolder) (releaseFunc func())
+
 // New creates an LSP server and binds it to handle incoming client
 // messages on the supplied stream.
 func New(session *cache.Session, client protocol.ClientCloser, options *settings.Options) protocol.Server {
@@ -72,6 +78,12 @@ func New(session *cache.Session, client protocol.ClientCloser, options *settings
 // the server processes any requests.
 func SetSessionSwapHook(s protocol.Server, hook SessionSwapHook) {
 	s.(*server).sessionSwapHook = hook
+}
+
+// SetPostInitHook sets the hook called at the end of addFolders. It must
+// be called before the server processes any requests.
+func SetPostInitHook(s protocol.Server, hook PostInitHook) {
+	s.(*server).postInitHook = hook
 }
 
 type serverState int
@@ -115,6 +127,10 @@ type server struct {
 	// sessionSwapHook, if set, is called at the start of addFolders to
 	// optionally swap the session for a pooled one. See SessionSwapHook.
 	sessionSwapHook SessionSwapHook
+
+	// postInitHook, if set, is called at the end of addFolders after Views
+	// are created. See PostInitHook.
+	postInitHook PostInitHook
 
 	// onShutdown, if set, is called instead of session.Shutdown during
 	// server Shutdown. Used to release a pooled session back to the pool
