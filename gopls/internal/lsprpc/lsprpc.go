@@ -51,6 +51,11 @@ type StreamServer struct {
 	// serverForTest may be set to a test fake for testing.
 	serverForTest protocol.Server
 
+	// pool, if non-nil, enables session reuse across LSP connections.
+	// Sessions are pooled by workspace root and reused by subsequent
+	// connections to the same workspace.
+	pool *sessionPool
+
 	// Keep track of active sessions, for interrogation.
 	sessionMu sync.Mutex
 	sessions  map[string]sessionServer
@@ -73,6 +78,69 @@ func NewStreamServer(cache *cache.Cache, daemon bool, optionsFunc func(*settings
 	}
 }
 
+// EnableSessionPool enables session reuse across LSP connections.
+// Sessions are pooled by workspace root and reused by subsequent
+// connections. Must be called before serving any connections.
+func (s *StreamServer) EnableSessionPool(idleTimeout time.Duration) {
+	s.pool = newSessionPool(s.cache, idleTimeout)
+}
+
+// makeSessionSwapHook returns a SessionSwapHook that manages the session
+// pool lifecycle for a connection. The hook is called at the start of
+// addFolders with the workspace folders from the initialize request.
+//
+// Pool hit: returns the warm session and a release function. The server
+// swaps to the pooled session and addFolders finds existing Views (fast).
+//
+// Pool miss: returns nil (no swap). Additionally returns a releaseFunc
+// that registers the server's current session in the pool when Shutdown
+// is called. By that time, addFolders has completed and the session has
+// warm Views ready for reuse.
+func (s *StreamServer) makeSessionSwapHook(session *cache.Session) server.SessionSwapHook {
+	return func(ctx context.Context, folders []protocol.WorkspaceFolder) (*cache.Session, func()) {
+		root := detectWorkspaceRoot(folders)
+		if root == "" {
+			return nil, nil
+		}
+		key := poolKey{root: root}
+
+		// Try to acquire a warm session.
+		if pooled := s.pool.acquire(key); pooled != nil {
+			return pooled, func() { s.pool.release(key) }
+		}
+
+		// Pool miss. Register the current session in the pool.
+		// The register call is safe here because the session object
+		// already exists (created in ServeStream), even though its
+		// Views haven't been created yet. The Views will be populated
+		// by addFolders after this hook returns. Future connections
+		// that acquire this session will find the Views warm.
+		winner := s.pool.register(key, session)
+		if winner != session {
+			// Another connection raced us. Use the winner.
+			return winner, func() { s.pool.release(key) }
+		}
+		// We registered. Return nil (no swap needed — the server
+		// already has this session) but set up the release.
+		return nil, func() { s.pool.release(key) }
+	}
+}
+
+// detectWorkspaceRoot returns the workspace root from the given folders.
+// For a single folder, this is its path. For multiple folders, this is
+// the first folder's path (which is typically the primary workspace).
+// Returns empty string if no valid folder is found.
+func detectWorkspaceRoot(folders []protocol.WorkspaceFolder) string {
+	for _, f := range folders {
+		uri, err := protocol.ParseDocumentURI(f.URI)
+		if err != nil {
+			continue
+		}
+		return uri.Path()
+	}
+	return ""
+}
+
 // SetSessionExitFunc sets the function to call when sessions exit.
 // It is not concurrency safe, and must only be called at most once, before the
 // receiver is passed to jsonrpc2.Serve.
@@ -92,6 +160,9 @@ func (s *StreamServer) ServeStream(ctx context.Context, conn jsonrpc2.Conn) erro
 	if svr == nil {
 		options := settings.DefaultOptions(s.optionsOverrides)
 		svr = server.New(session, client, options)
+		if s.pool != nil {
+			server.SetSessionSwapHook(svr, s.makeSessionSwapHook(session))
+		}
 		if instance := debug.GetInstance(ctx); instance != nil {
 			instance.AddService(svr, session)
 		}
