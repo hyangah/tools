@@ -283,6 +283,7 @@ func (app *Application) featureCommands() []tool.Application {
 	return []tool.Application{
 		&callHierarchy{app: app},
 		&check{app: app, Severity: "warning"},
+		&cliCmd{app: app},
 		&codeaction{app: app},
 		&codelens{app: app},
 		&definition{app: app},
