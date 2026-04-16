@@ -14,6 +14,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 
 	"golang.org/x/telemetry"
 	"golang.org/x/telemetry/counter"
@@ -46,11 +47,42 @@ func main() {
 	// directory (for example at the start of every RPC) and
 	// either re-create it or just fail the RPC with an
 	// informative error and terminate the process.
-	if _, err := filecache.Get("nonesuch", [32]byte{}, filecache.Bytes); err != nil && err != filecache.ErrNotFound {
-		counter.Inc("gopls/nocache")
-		log.Fatalf("gopls cannot access its persistent index (disk full?): %v", err)
+	//
+	// With -remote=<addr>, this process forwards LSP calls to a daemon
+	// and never touches the local filecache, so the ~20 ms smoke test
+	// is pure overhead on every CLI invocation. The daemon itself runs
+	// this check at its own startup. Skip here in that case.
+	if !hasRemoteFlag(os.Args[1:]) {
+		if _, err := filecache.Get("nonesuch", [32]byte{}, filecache.Bytes); err != nil && err != filecache.ErrNotFound {
+			counter.Inc("gopls/nocache")
+			log.Fatalf("gopls cannot access its persistent index (disk full?): %v", err)
+		}
 	}
 
 	ctx := context.Background()
 	tool.Main(ctx, cmd.New(), os.Args[1:])
+}
+
+// hasRemoteFlag reports whether args contains a non-empty -remote flag
+// (forms: -remote=V, --remote=V, -remote V, --remote V, where V != "").
+// Scans only leading flags (stops at the first non-flag, which is the
+// subcommand name).
+func hasRemoteFlag(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") || a == "-" || a == "--" {
+			return false
+		}
+		name := strings.TrimLeft(a, "-")
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			if name[:eq] == "remote" {
+				return name[eq+1:] != ""
+			}
+			continue
+		}
+		if name == "remote" && i+1 < len(args) {
+			return args[i+1] != ""
+		}
+	}
+	return false
 }
