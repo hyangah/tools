@@ -1,7 +1,7 @@
 start the gopls MCP server in headless mode
 
 Usage:
-  gopls [flags] mcp [mcp-flags]
+  gopls [flags] mcp
 
 Starts the gopls MCP server in headless mode, without needing an LSP client.
 Starts the server over stdio or sse with http, depending on whether the listen flag is provided.

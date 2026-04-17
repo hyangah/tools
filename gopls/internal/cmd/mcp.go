@@ -31,7 +31,7 @@ type headlessMCP struct {
 
 func (m *headlessMCP) Name() string      { return "mcp" }
 func (m *headlessMCP) Parent() string    { return m.app.Name() }
-func (m *headlessMCP) Usage() string     { return "[mcp-flags]" }
+func (m *headlessMCP) Usage() string     { return "" }
 func (m *headlessMCP) ShortHelp() string { return "start the gopls MCP server in headless mode" }
 
 func (m *headlessMCP) DetailedHelp(f *flag.FlagSet) {

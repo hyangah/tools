@@ -1,7 +1,7 @@
 format the code according to the go standard
 
 Usage:
-  gopls [flags] format [format-flags] <filerange>
+  gopls [flags] format <filerange>
 
 The arguments supplied may be simple file names, or ranges within files.
 
@@ -9,7 +9,7 @@ Example: reformat this file:
 
 	$ gopls format -w internal/cmd/check.go
 
-format-flags:
+flags:
   -d,-diff
     	display diffs instead of edited file content
   -l,-list

@@ -48,17 +48,17 @@ type Serve struct {
 
 func (s *Serve) Name() string   { return "serve" }
 func (s *Serve) Parent() string { return s.app.Name() }
-func (s *Serve) Usage() string  { return "[server-flags]" }
+func (s *Serve) Usage() string  { return "" }
 func (s *Serve) ShortHelp() string {
 	return "run a server for Go code using the Language Server Protocol"
 }
 func (s *Serve) DetailedHelp(f *flag.FlagSet) {
-	fmt.Fprint(f.Output(), `  gopls [flags] [server-flags]
-
+	fmt.Fprint(f.Output(), `
 The server communicates using JSONRPC2 on stdin and stdout, and is intended to be run directly as
-a child of an editor process.
+a child of an editor process. The 'serve' verb may be omitted; 'gopls' with no subcommand is
+equivalent to 'gopls serve'.
 
-server-flags:
+flags:
 `)
 	printFlagDefaults(f)
 }

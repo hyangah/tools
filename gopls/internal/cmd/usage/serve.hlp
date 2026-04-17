@@ -1,13 +1,13 @@
 run a server for Go code using the Language Server Protocol
 
 Usage:
-  gopls [flags] serve [server-flags]
-  gopls [flags] [server-flags]
+  gopls [flags] serve
 
 The server communicates using JSONRPC2 on stdin and stdout, and is intended to be run directly as
-a child of an editor process.
+a child of an editor process. The 'serve' verb may be omitted; 'gopls' with no subcommand is
+equivalent to 'gopls serve'.
 
-server-flags:
+flags:
   -debug=string
     	serve debug information on the supplied address
   -listen=string

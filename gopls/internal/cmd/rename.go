@@ -21,7 +21,7 @@ type rename struct {
 
 func (r *rename) Name() string      { return "rename" }
 func (r *rename) Parent() string    { return r.app.Name() }
-func (r *rename) Usage() string     { return "[rename-flags] <position> <name>" }
+func (r *rename) Usage() string     { return "<position> <name>" }
 func (r *rename) ShortHelp() string { return "rename selected identifier" }
 func (r *rename) DetailedHelp(f *flag.FlagSet) {
 	fmt.Fprint(f.Output(), `
@@ -31,7 +31,7 @@ Example:
 	$ gopls rename helper/helper.go:8:6 Foo
 	$ gopls rename helper/helper.go:#53 Foo
 
-rename-flags:
+flags:
 `)
 	printFlagDefaults(f)
 }
