@@ -342,7 +342,7 @@ func (app *Application) internalCommands() []tool.Application {
 }
 
 func (app *Application) featureCommands() []tool.Application {
-	return []tool.Application{
+	cmds := []tool.Application{
 		&callHierarchy{app: app},
 		&check{app: app, Severity: "warning"},
 		&codeaction{app: app},
@@ -366,9 +366,12 @@ func (app *Application) featureCommands() []tool.Application {
 		&signature{app: app},
 		&stats{app: app},
 		&symbols{app: app},
-
 		&workspaceSymbol{app: app},
 	}
+	sort.SliceStable(cmds, func(i, j int) bool {
+		return cmds[i].Name() < cmds[j].Name()
+	})
+	return cmds
 }
 
 // connect creates and initializes a new in-process gopls LSP session.

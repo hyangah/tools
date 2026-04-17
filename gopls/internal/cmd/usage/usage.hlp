@@ -32,15 +32,15 @@ Features
   fix               apply suggested fixes (obsolete)
   folding_ranges    display selected file's folding ranges
   format            format the code according to the go standard
-  mcp               start the gopls MCP server in headless mode
   highlight         display selected identifier's highlights
   implementation    display selected identifier's implementation
   imports           updates import statements
-  remote            interact with the gopls daemon
   inspect           interact with the gopls daemon (deprecated: use 'remote')
   links             list links in a file
+  mcp               start the gopls MCP server in headless mode
   prepare_rename    test validity of a rename operation at location
   references        display selected identifier's references
+  remote            interact with the gopls daemon
   rename            rename selected identifier
   semtok            show semantic tokens for the specified file
   signature         display selected identifier's signature
