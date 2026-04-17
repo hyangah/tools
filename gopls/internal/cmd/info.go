@@ -33,7 +33,7 @@ type help struct {
 
 func (h *help) Name() string      { return "help" }
 func (h *help) Parent() string    { return h.app.Name() }
-func (h *help) Usage() string     { return "" }
+func (h *help) Usage() string     { return "[<subject>]" }
 func (h *help) ShortHelp() string { return "print usage information for subcommands" }
 func (h *help) DetailedHelp(f *flag.FlagSet) {
 	fmt.Fprint(f.Output(), `
