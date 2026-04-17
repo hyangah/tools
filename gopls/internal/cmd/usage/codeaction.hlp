@@ -1,7 +1,7 @@
 list or execute code actions
 
 Usage:
-  gopls [flags] codeaction filename[:line[:col]]
+  gopls codeaction [flags] filename[:line[:col]]
 
 
 The codeaction command lists or executes code actions for the

@@ -1,7 +1,7 @@
 show diagnostic results for the specified file
 
 Usage:
-  gopls [flags] check <filename>
+  gopls check [flags] <filename>
 
 Example: show the diagnostic results of this file:
 

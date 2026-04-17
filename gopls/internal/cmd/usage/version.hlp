@@ -1,7 +1,7 @@
 print the gopls version information
 
 Usage:
-  gopls [flags] version
+  gopls version [flags]
   -json
     	outputs in json format.
   -otel=string

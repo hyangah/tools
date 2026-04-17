@@ -1,7 +1,7 @@
 print licenses of included software
 
 Usage:
-  gopls [flags] licenses
+  gopls licenses [flags]
   -otel=string
     	export telemetry to specified OpenTelemetry collector address (e.g. http://localhost:4318)
   -profile.alloc=string

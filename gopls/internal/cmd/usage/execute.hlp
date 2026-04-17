@@ -1,7 +1,7 @@
 Execute a gopls custom LSP command
 
 Usage:
-  gopls [flags] execute command argument...
+  gopls execute [flags] command argument...
 
 The execute command sends an LSP ExecuteCommand request to gopls,
 with a set of optional JSON argument values.

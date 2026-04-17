@@ -1,7 +1,7 @@
 updates import statements
 
 Usage:
-  gopls [flags] imports <filename>
+  gopls imports [flags] <filename>
 
 Example: update imports statements in a file:
 

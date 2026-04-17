@@ -1,7 +1,7 @@
 display selected identifier's highlights
 
 Usage:
-  gopls [flags] highlight <position>
+  gopls highlight [flags] <position>
 
 Example:
 

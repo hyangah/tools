@@ -1,7 +1,7 @@
 interact with the gopls daemon
 
 Usage:
-  gopls [flags] remote <subcommand> [arg]...
+  gopls remote [flags] <subcommand> [arg]...
 
 Subcommand:
   -otel=string

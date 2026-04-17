@@ -1,7 +1,7 @@
 format the code according to the go standard
 
 Usage:
-  gopls [flags] format <filerange>
+  gopls format [flags] <filerange>
 
 The arguments supplied may be simple file names, or ranges within files.
 

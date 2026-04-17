@@ -1,7 +1,7 @@
 display selected identifier's implementation
 
 Usage:
-  gopls [flags] implementation <position>
+  gopls implementation [flags] <position>
 
 Example:
 

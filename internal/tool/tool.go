@@ -136,7 +136,12 @@ func prepareFlags(s *flag.FlagSet, app, parent Application) *Profile {
 		if app.ShortHelp() != "" {
 			fmt.Fprintf(s.Output(), "%s\n\nUsage:\n  ", app.ShortHelp())
 			if sub, ok := app.(SubCommand); ok && sub.Parent() != "" {
-				fmt.Fprintf(s.Output(), "%s [flags] %s", sub.Parent(), app.Name())
+				// Place [flags] after the subcommand name: stdlib flag stops
+				// at the first non-flag arg, so a subcommand's own flags
+				// (and globals inherited by [RunInherited]) are parsed in
+				// this position. Globals may also appear before the
+				// subcommand name at the parent's Application stage.
+				fmt.Fprintf(s.Output(), "%s %s [flags]", sub.Parent(), app.Name())
 			} else {
 				fmt.Fprintf(s.Output(), "%s [flags]", app.Name())
 			}

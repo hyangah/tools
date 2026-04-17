@@ -1,7 +1,7 @@
 display selected identifier's call hierarchy
 
 Usage:
-  gopls [flags] call_hierarchy <position>
+  gopls call_hierarchy [flags] <position>
 
 Example:
 

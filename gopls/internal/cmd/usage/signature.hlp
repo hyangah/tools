@@ -1,7 +1,7 @@
 display selected identifier's signature
 
 Usage:
-  gopls [flags] signature <position>
+  gopls signature [flags] <position>
 
 Example:
 

@@ -1,7 +1,7 @@
 run vulncheck analysis (internal-use only)
 
 Usage:
-  gopls [flags] vulncheck
+  gopls vulncheck [flags]
 
 	WARNING: this command is for internal-use only.
 

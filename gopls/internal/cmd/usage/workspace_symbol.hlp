@@ -1,7 +1,7 @@
 search symbols in workspace
 
 Usage:
-  gopls [flags] workspace_symbol <query>
+  gopls workspace_symbol [flags] <query>
 
 Example:
 

@@ -1,7 +1,7 @@
 print usage information for subcommands
 
 Usage:
-  gopls [flags] help [<subject>]
+  gopls help [flags] [<subject>]
 
 
 Examples:

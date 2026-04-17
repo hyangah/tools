@@ -1,7 +1,7 @@
 display selected identifier's references
 
 Usage:
-  gopls [flags] references <position>
+  gopls references [flags] <position>
 
 Example:
 

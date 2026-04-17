@@ -1,5 +1,5 @@
 apply suggested fixes (obsolete)
 
 Usage:
-  gopls [flags] fix
+  gopls fix [flags]
 No longer supported; use "gopls codeaction" instead.

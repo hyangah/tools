@@ -1,7 +1,7 @@
 List or execute code lenses for a file
 
 Usage:
-  gopls [flags] codelens file[:line[:col]] [title]
+  gopls codelens [flags] file[:line[:col]] [title]
 
 The codelens command lists or executes code lenses for the specified
 file, or line within a file. A code lens is a command associated with

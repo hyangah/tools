@@ -1,7 +1,7 @@
 list links in a file
 
 Usage:
-  gopls [flags] links <filename>
+  gopls links [flags] <filename>
 
 Example: list links contained within a file:
 

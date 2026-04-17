@@ -1,7 +1,7 @@
 rename selected identifier
 
 Usage:
-  gopls [flags] rename <position> <name>
+  gopls rename [flags] <position> <name>
 
 Example:
 
