@@ -9,6 +9,7 @@ package cmd_test
 // after the subcommand name. See gopls/doc/design/flags.md.
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -65,6 +66,41 @@ func TestFlag_unknownFlagStillFails(t *testing.T) {
 	res := gopls(t, tree, "version", "-notaflag")
 	res.checkExit(false)
 	res.checkStderr("flag provided but not defined")
+}
+
+// TestFlag_topLevelHelpSplitsGlobalAndServe verifies that the top-level
+// help renders two labeled flag sections ("global flags" and "serve flags")
+// and classifies well-known flags correctly.
+func TestFlag_topLevelHelpSplitsGlobalAndServe(t *testing.T) {
+	t.Parallel()
+
+	tree := writeTree(t, "")
+
+	res := gopls(t, tree, "-h")
+	res.checkExit(true)
+	// -h writes usage via the FlagSet's output (stderr by default).
+	out := res.stderr
+	if !strings.Contains(out, "global flags:") {
+		t.Errorf("help output missing 'global flags:' header:\n%s", out)
+	}
+	if !strings.Contains(out, "serve flags:") {
+		t.Errorf("help output missing 'serve flags:' header:\n%s", out)
+	}
+	// -v,-verbose belongs under global flags; it must appear above
+	// the 'serve flags' header.
+	gi := strings.Index(out, "global flags:")
+	si := strings.Index(out, "serve flags:")
+	if gi < 0 || si < 0 || gi >= si {
+		t.Fatalf("section headers out of order: global=%d serve=%d", gi, si)
+	}
+	globalSection := out[gi:si]
+	serveSection := out[si:]
+	if !strings.Contains(globalSection, "-v,-verbose") {
+		t.Errorf("-v,-verbose should be under 'global flags':\n%s", globalSection)
+	}
+	if !strings.Contains(serveSection, "-logfile") {
+		t.Errorf("-logfile should be under 'serve flags':\n%s", serveSection)
+	}
 }
 
 // TestFlag_helpListsInheritedFlags verifies that `gopls help <subcommand>`

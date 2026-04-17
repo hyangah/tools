@@ -153,12 +153,62 @@ Command:
 			fmt.Fprintf(w, "  %s\t%s\n", c.Name(), c.ShortHelp())
 		}
 	}
-	fmt.Fprint(w, "\nflags:\n")
-	printFlagDefaults(f)
+
+	// Split the top-level flag list into two labeled sections. "Global"
+	// flags are those declared directly on *Application (and on its
+	// embedded Profile); "serve" flags are those inherited from the
+	// Serve sub-Application. They are mixed together in f because
+	// Serve is embedded at the Application flag-set level for historical
+	// compatibility ("gopls -listen=... " without the serve verb).
+	global := app.globalFlagNames()
+	isGlobal := func(names []string) bool { return global[names[0]] }
+	fmt.Fprint(w, "\nglobal flags:\n")
+	printFlagDefaultsFiltered(f, isGlobal)
+	fmt.Fprint(w, "\nserve flags:\n")
+	printFlagDefaultsFiltered(f, func(names []string) bool { return !isGlobal(names) })
+}
+
+// globalFlagNames returns the set of flag names (including aliases)
+// declared directly on *Application, i.e. the flags that should appear
+// in the top-level help's "global flags" section. Fields reachable only
+// through the named Serve field are excluded; embedded (anonymous) fields
+// such as tool.Profile are included.
+func (app *Application) globalFlagNames() map[string]bool {
+	names := map[string]bool{}
+	var walk func(t reflect.Type)
+	walk = func(t reflect.Type) {
+		for i := 0; i < t.NumField(); i++ {
+			sf := t.Field(i)
+			if tag, ok := sf.Tag.Lookup("flag"); ok {
+				for _, n := range strings.Split(tag, ",") {
+					names[n] = true
+				}
+				continue
+			}
+			if !sf.Anonymous {
+				continue
+			}
+			ft := sf.Type
+			if ft.Kind() == reflect.Pointer {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct {
+				walk(ft)
+			}
+		}
+	}
+	walk(reflect.TypeOf(*app))
+	return names
 }
 
 // this is a slightly modified version of flag.PrintDefaults to give us control
 func printFlagDefaults(s *flag.FlagSet) {
+	printFlagDefaultsFiltered(s, nil)
+}
+
+// printFlagDefaultsFiltered is printFlagDefaults restricted to flag groups
+// whose alias list satisfies include. A nil include prints every group.
+func printFlagDefaultsFiltered(s *flag.FlagSet, include func(names []string) bool) {
 	var flags [][]*flag.Flag
 	seen := map[flag.Value]int{}
 	s.VisitAll(func(f *flag.Flag) {
@@ -173,6 +223,15 @@ func printFlagDefaults(s *flag.FlagSet) {
 		sort.SliceStable(entry, func(i, j int) bool {
 			return len(entry[i].Name) < len(entry[j].Name)
 		})
+		if include != nil {
+			names := make([]string, len(entry))
+			for i, f := range entry {
+				names[i] = f.Name
+			}
+			if !include(names) {
+				continue
+			}
+		}
 		var b strings.Builder
 		for i, f := range entry {
 			switch i {

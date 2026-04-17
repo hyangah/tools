@@ -48,23 +48,9 @@ Features
   symbols           display selected file's symbols
   workspace_symbol  search symbols in workspace
 
-flags:
-  -debug=string
-    	serve debug information on the supplied address
-  -listen=string
-    	address on which to listen for remote connections. If prefixed by 'unix;', the subsequent address is assumed to be a unix domain socket. Otherwise, TCP is used.
-  -listen.timeout=duration
-    	when used with -listen, shut down the server when there are no connected clients for this duration
-  -logfile=string
-    	filename to log to. if value is "auto", then logging to a default output file is enabled
-  -mcp.listen=string
-    	experimental: address on which to listen for model context protocol connections. If port is localhost:0, pick a random port in localhost instead.
-  -mode=string
-    	no effect
+global flags:
   -otel=string
     	export telemetry to specified OpenTelemetry collector address (e.g. http://localhost:4318)
-  -port=int
-    	port on which to run gopls for debugging purposes
   -profile.alloc=string
     	write alloc profile to this file
   -profile.block=string
@@ -77,6 +63,26 @@ flags:
     	write trace log to this file
   -remote=string
     	forward all commands to a remote lsp specified by this flag. With no special prefix, this is assumed to be a TCP address. If prefixed by 'unix;', the subsequent address is assumed to be a unix domain socket. If 'auto', or prefixed by 'auto;', the remote address is automatically resolved based on the executing environment.
+  -v,-verbose
+    	verbose output
+  -vv,-veryverbose
+    	very verbose output
+
+serve flags:
+  -debug=string
+    	serve debug information on the supplied address
+  -listen=string
+    	address on which to listen for remote connections. If prefixed by 'unix;', the subsequent address is assumed to be a unix domain socket. Otherwise, TCP is used.
+  -listen.timeout=duration
+    	when used with -listen, shut down the server when there are no connected clients for this duration
+  -logfile=string
+    	filename to log to. if value is "auto", then logging to a default output file is enabled
+  -mcp.listen=string
+    	experimental: address on which to listen for model context protocol connections. If port is localhost:0, pick a random port in localhost instead.
+  -mode=string
+    	no effect
+  -port=int
+    	port on which to run gopls for debugging purposes
   -remote.debug=string
     	when used with -remote=auto, the -debug value used to start the daemon
   -remote.listen.timeout=duration
@@ -85,7 +91,3 @@ flags:
     	when used with -remote=auto, the -logfile value used to start the daemon
   -rpc.trace
     	print the full rpc trace in lsp inspector format
-  -v,-verbose
-    	verbose output
-  -vv,-veryverbose
-    	very verbose output
