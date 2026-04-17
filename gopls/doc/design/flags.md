@@ -423,6 +423,49 @@ No migration scripts or data changes are involved anywhere.
   (e.g., v0.20), add a CLI-changes bullet; otherwise note in
   `gopls/doc/release/`.
 
+## Future work
+
+After Phases 0–3, `gopls <cmd> -h` and `gopls help <cmd>` produce the
+same output: synopsis, full prose, example(s), and a single `flags:`
+block listing both the subcommand's own flags and every inherited
+global. For a command like `codeaction` this runs ~70 lines and mixes
+~10 rarely-used globals (`-otel`, `-profile.*`, `-remote`, `-v`, `-vv`)
+in with the 3–5 flags a user actually cares about. A few follow-ups,
+in rough cost/value order:
+
+1. **Split flags into two sections in subcommand help.** Reuse the
+   `globalFlagNames` predicate from Phase 2 to render `flags:` (local)
+   separately from `global flags:` (inherited). Low cost; directly
+   addresses the "hard to find the important flag" complaint. This
+   supersedes the Phase 1 Commit 3 sketch, which was written before
+   Phase 2's predicate existed.
+
+2. **Demote `-profile.*` and `-otel` from routine help.** They are
+   diagnostic tooling, not daily flags. Hide from the default `-h`
+   output; surface them only under a verbose-help mode or under
+   `gopls help <cmd>`. Removes 6 of the 10 noisy inherited entries
+   with no loss of functionality — the flags still parse.
+
+3. **Tier help output.** Make `gopls <cmd> -h` terse (synopsis +
+   usage + local flags only) and reserve the long prose, examples,
+   and global-flag listing for `gopls help <cmd>`. Mirrors the
+   `go build -h` vs `go help build` pattern. Requires plumbing a
+   "short vs long" signal through `tool.Run` / `(*help).Run`.
+
+4. **Trim long inline enums.** `codeaction` currently lists ~30
+   CodeAction kinds in its help text; `stats`, `remote`, and a few
+   others also carry long reference material inline. Move these to
+   docs under `gopls/doc/`, or surface them behind dedicated
+   subcommand affordances (e.g. `gopls codeaction -list-kinds`).
+
+5. **Group flags by purpose within a section.** Within `flags:`,
+   bucket by role (output formatting, filters, actions). Requires
+   per-command metadata beyond today's `flag:"name"` tag; probably
+   not worth the plumbing until #1–#3 are in.
+
+Phases 0–3 left the help output *correct*; these follow-ups would
+make it *easy to skim*.
+
 ## Local workflow (prototype)
 
 Branch: `cli-flags-overhaul` (local only; do not push).
