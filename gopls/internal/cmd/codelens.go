@@ -24,7 +24,7 @@ type codelens struct {
 
 func (r *codelens) Name() string      { return "codelens" }
 func (r *codelens) Parent() string    { return r.app.Name() }
-func (r *codelens) Usage() string     { return "[codelens-flags] file[:line[:col]] [title]" }
+func (r *codelens) Usage() string     { return "file[:line[:col]] [title]" }
 func (r *codelens) ShortHelp() string { return "List or execute code lenses for a file" }
 func (r *codelens) DetailedHelp(f *flag.FlagSet) {
 	fmt.Fprint(f.Output(), `
@@ -47,7 +47,7 @@ Example:
 	$ gopls codelens a_test.go "run test"          # list gopls.run_tests commands
 	$ gopls codelens -exec a_test.go:10 "run test" # run a specific test
 
-codelens-flags:
+flags:
 `)
 	printFlagDefaults(f)
 }

@@ -1,7 +1,7 @@
 list or execute code actions
 
 Usage:
-  gopls [flags] codeaction [codeaction-flags] filename[:line[:col]]
+  gopls [flags] codeaction filename[:line[:col]]
 
 
 The codeaction command lists or executes code actions for the
@@ -69,7 +69,7 @@ Example: execute the first "quick fix" in the specified file and show the diff:
 
 	$ gopls codeaction -kind=quickfix -exec -diff ./gopls/main.go
 
-codeaction-flags:
+flags:
   -d,-diff
     	display diffs instead of edited file content
   -exec

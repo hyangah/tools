@@ -1,7 +1,7 @@
 List or execute code lenses for a file
 
 Usage:
-  gopls [flags] codelens [codelens-flags] file[:line[:col]] [title]
+  gopls [flags] codelens file[:line[:col]] [title]
 
 The codelens command lists or executes code lenses for the specified
 file, or line within a file. A code lens is a command associated with
@@ -22,7 +22,7 @@ Example:
 	$ gopls codelens a_test.go "run test"          # list gopls.run_tests commands
 	$ gopls codelens -exec a_test.go:10 "run test" # run a specific test
 
-codelens-flags:
+flags:
   -d,-diff
     	display diffs instead of edited file content
   -exec

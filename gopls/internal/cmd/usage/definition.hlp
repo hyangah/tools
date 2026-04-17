@@ -1,14 +1,14 @@
 show declaration of selected identifier
 
 Usage:
-  gopls [flags] definition [definition-flags] <position>
+  gopls [flags] definition <position>
 
 Example: show the definition of the identifier at syntax at offset 44 in this file (flag.FlagSet):
 
 	$ gopls definition internal/cmd/definition.go:44:47
 	$ gopls definition internal/cmd/definition.go:#1270
 
-definition-flags:
+flags:
   -json
     	emit output in JSON format
   -markdown

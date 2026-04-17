@@ -28,7 +28,7 @@ type codeaction struct {
 
 func (cmd *codeaction) Name() string      { return "codeaction" }
 func (cmd *codeaction) Parent() string    { return cmd.app.Name() }
-func (cmd *codeaction) Usage() string     { return "[codeaction-flags] filename[:line[:col]]" }
+func (cmd *codeaction) Usage() string     { return "filename[:line[:col]]" }
 func (cmd *codeaction) ShortHelp() string { return "list or execute code actions" }
 func (cmd *codeaction) DetailedHelp(f *flag.FlagSet) {
 	fmt.Fprintf(f.Output(), `
@@ -98,7 +98,7 @@ Example: execute the first "quick fix" in the specified file and show the diff:
 
 	$ gopls codeaction -kind=quickfix -exec -diff ./gopls/main.go
 
-codeaction-flags:
+flags:
 `)
 	printFlagDefaults(f)
 }

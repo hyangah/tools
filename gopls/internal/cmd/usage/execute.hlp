@@ -1,7 +1,7 @@
 Execute a gopls custom LSP command
 
 Usage:
-  gopls [flags] execute [flags] command argument...
+  gopls [flags] execute command argument...
 
 The execute command sends an LSP ExecuteCommand request to gopls,
 with a set of optional JSON argument values.
@@ -17,7 +17,7 @@ Examples:
 	$ gopls execute gopls.run_tests '{"URI": "file:///a_test.go", "Tests": ["Test"]}'
 	$ gopls execute gopls.list_known_packages '{"URI": "file:///hello.go"}'
 
-execute-flags:
+flags:
   -d,-diff
     	display diffs instead of edited file content
   -l,-list

@@ -25,7 +25,7 @@ type execute struct {
 
 func (e *execute) Name() string      { return "execute" }
 func (e *execute) Parent() string    { return e.app.Name() }
-func (e *execute) Usage() string     { return "[flags] command argument..." }
+func (e *execute) Usage() string     { return "command argument..." }
 func (e *execute) ShortHelp() string { return "Execute a gopls custom LSP command" }
 func (e *execute) DetailedHelp(f *flag.FlagSet) {
 	fmt.Fprint(f.Output(), `
@@ -43,7 +43,7 @@ Examples:
 	$ gopls execute gopls.run_tests '{"URI": "file:///a_test.go", "Tests": ["Test"]}'
 	$ gopls execute gopls.list_known_packages '{"URI": "file:///hello.go"}'
 
-execute-flags:
+flags:
 `)
 	printFlagDefaults(f)
 }

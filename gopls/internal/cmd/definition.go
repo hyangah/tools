@@ -42,7 +42,7 @@ type definition struct {
 
 func (d *definition) Name() string      { return "definition" }
 func (d *definition) Parent() string    { return d.app.Name() }
-func (d *definition) Usage() string     { return "[definition-flags] <position>" }
+func (d *definition) Usage() string     { return "<position>" }
 func (d *definition) ShortHelp() string { return "show declaration of selected identifier" }
 func (d *definition) DetailedHelp(f *flag.FlagSet) {
 	fmt.Fprintf(f.Output(), `
@@ -51,7 +51,7 @@ Example: show the definition of the identifier at syntax at offset %[1]v in this
 	$ gopls definition internal/cmd/definition.go:%[1]v:%[2]v
 	$ gopls definition internal/cmd/definition.go:#%[3]v
 
-definition-flags:
+flags:
 `, exampleLine, exampleColumn, exampleOffset)
 	printFlagDefaults(f)
 }

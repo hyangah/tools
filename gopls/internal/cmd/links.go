@@ -24,7 +24,7 @@ type links struct {
 
 func (l *links) Name() string      { return "links" }
 func (l *links) Parent() string    { return l.app.Name() }
-func (l *links) Usage() string     { return "[links-flags] <filename>" }
+func (l *links) Usage() string     { return "<filename>" }
 func (l *links) ShortHelp() string { return "list links in a file" }
 func (l *links) DetailedHelp(f *flag.FlagSet) {
 	fmt.Fprintf(f.Output(), `
@@ -32,7 +32,7 @@ Example: list links contained within a file:
 
 	$ gopls links internal/cmd/check.go
 
-links-flags:
+flags:
 `)
 	printFlagDefaults(f)
 }

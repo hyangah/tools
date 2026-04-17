@@ -1,13 +1,13 @@
 updates import statements
 
 Usage:
-  gopls [flags] imports [imports-flags] <filename>
+  gopls [flags] imports <filename>
 
 Example: update imports statements in a file:
 
 	$ gopls imports -w internal/cmd/check.go
 
-imports-flags:
+flags:
   -d,-diff
     	display diffs instead of edited file content
   -l,-list
