@@ -239,13 +239,16 @@ func (app *Application) Run(ctx context.Context, args ...string) error {
 	ctx = debug.WithInstance(ctx, app.OTel)
 	if len(args) == 0 {
 		s := flag.NewFlagSet(app.Name(), flag.ExitOnError)
-		return tool.Run(ctx, s, &app.Serve, args)
+		return tool.RunInherited(ctx, s, &app.Serve, app, args)
 	}
 	command, args := args[0], args[1:]
 	for _, c := range app.Commands() {
 		if c.Name() == command {
 			s := flag.NewFlagSet(app.Name(), flag.ExitOnError)
-			return tool.Run(ctx, s, c, args)
+			// RunInherited registers the Application's global flags
+			// (-v, -vv, -remote, -otel, -profile.*) on the subcommand's
+			// FlagSet, so they may appear after the subcommand name.
+			return tool.RunInherited(ctx, s, c, app, args)
 		}
 	}
 	return tool.CommandLineErrorf("Unknown command %v", command)

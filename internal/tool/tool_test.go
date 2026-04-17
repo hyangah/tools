@@ -164,6 +164,57 @@ func TestRunInherited_profileInheritedFromParent(t *testing.T) {
 	}
 }
 
+// testParentWithNested models an Application that has a named struct
+// field whose type carries its own flag tags (e.g. gopls Application's
+// Serve field). Inheritance should NOT recurse into it.
+type testParentWithNested struct {
+	tool.Profile
+
+	Verbose bool `flag:"v,verbose" help:"verbose output"`
+
+	// Nested is a named (non-anonymous) sub-Application. Its Port flag
+	// must not leak into inheriting subcommands.
+	Nested testNested
+}
+
+func (p *testParentWithNested) Name() string                             { return "parent" }
+func (p *testParentWithNested) Usage() string                            { return "" }
+func (p *testParentWithNested) ShortHelp() string                        { return "" }
+func (p *testParentWithNested) DetailedHelp(f *flag.FlagSet)             { f.PrintDefaults() }
+func (p *testParentWithNested) Run(_ context.Context, _ ...string) error { return nil }
+
+type testNested struct {
+	Port int `flag:"port" help:"server port"`
+}
+
+func (testNested) Name() string                             { return "nested" }
+func (testNested) Usage() string                            { return "" }
+func (testNested) ShortHelp() string                        { return "" }
+func (testNested) DetailedHelp(f *flag.FlagSet)             { f.PrintDefaults() }
+func (testNested) Run(_ context.Context, _ ...string) error { return nil }
+
+func TestRunInherited_skipsNamedStructFields(t *testing.T) {
+	parent := &testParentWithNested{}
+	sub := &testSub{}
+	s := flag.NewFlagSet("sub", flag.ContinueOnError)
+	s.SetOutput(&bytes.Buffer{})
+	if err := tool.RunInherited(context.Background(), s, sub, parent, []string{"-v"}); err != nil {
+		t.Fatalf("RunInherited: %v", err)
+	}
+	if !parent.Verbose {
+		t.Error("-v did not set Verbose")
+	}
+	// The named Nested field is itself a sub-Application; its flags must
+	// not be registered on the outer subcommand's FlagSet.
+	if f := s.Lookup("port"); f != nil {
+		t.Errorf("-port should not be inherited through a named struct field, got %v", f)
+	}
+	// But embedded Profile is anonymous and should be inherited.
+	if s.Lookup("profile.cpu") == nil {
+		t.Error("profile.cpu should be inherited through embedded Profile")
+	}
+}
+
 func TestRunInherited_nilParentMatchesRun(t *testing.T) {
 	// Passing nil parent should behave identically to tool.Run.
 	parent := &testParent{}

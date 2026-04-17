@@ -8,3 +8,21 @@ Example:
 	$ # 1-indexed location (:line:column or :#offset) of the target identifier
 	$ gopls prepare_rename helper/helper.go:8:6
 	$ gopls prepare_rename helper/helper.go:#53
+  -otel=string
+    	export telemetry to specified OpenTelemetry collector address (e.g. http://localhost:4318)
+  -profile.alloc=string
+    	write alloc profile to this file
+  -profile.block=string
+    	write block profile to this file
+  -profile.cpu=string
+    	write CPU profile to this file
+  -profile.mem=string
+    	write memory profile to this file
+  -profile.trace=string
+    	write trace log to this file
+  -remote=string
+    	forward all commands to a remote lsp specified by this flag. With no special prefix, this is assumed to be a TCP address. If prefixed by 'unix;', the subsequent address is assumed to be a unix domain socket. If 'auto', or prefixed by 'auto;', the remote address is automatically resolved based on the executing environment.
+  -v,-verbose
+    	verbose output
+  -vv,-veryverbose
+    	very verbose output

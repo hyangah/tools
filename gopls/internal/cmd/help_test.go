@@ -39,7 +39,14 @@ func TestHelpFiles(t *testing.T) {
 			var buf bytes.Buffer
 			s := flag.NewFlagSet(page.Name(), flag.ContinueOnError)
 			s.SetOutput(&buf)
-			tool.Run(ctx, s, page, []string{"-h"}) // ignore error
+			// Subcommand pages inherit the Application's global flags at
+			// runtime (see (*Application).Run), so mirror that here so
+			// the generated help matches what users actually see.
+			if page == tool.Application(app) {
+				tool.Run(ctx, s, page, []string{"-h"}) // ignore error
+			} else {
+				tool.RunInherited(ctx, s, page, app, []string{"-h"}) // ignore error
+			}
 			name := page.Name()
 			if name == appName {
 				name = "usage"

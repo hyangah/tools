@@ -301,6 +301,20 @@ func addFlags(f *flag.FlagSet, field reflect.StructField, value reflect.Value, s
 		if v.Kind() != reflect.Pointer {
 			v = v.Addr()
 		}
+		// When inheriting (skipExisting), descend only into embedded
+		// (anonymous) fields. A named struct field such as
+		// Application.Serve is a nested subcommand, not a set of
+		// globals, so its flags should not be registered on the outer
+		// subcommand's FlagSet.
+		if skipExisting && !child.Anonymous {
+			ct := child.Type
+			if ct.Kind() == reflect.Pointer {
+				ct = ct.Elem()
+			}
+			if ct.Kind() == reflect.Struct {
+				continue
+			}
+		}
 		// check if that field is a flag or contains flags
 		if fp := addFlags(f, child, v, skipExisting); fp != nil {
 			p = fp
