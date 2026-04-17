@@ -108,6 +108,30 @@ func Main(ctx context.Context, app Application, args []string) {
 // Run, and by various tests.  It runs the application and returns an
 // error.
 func Run(ctx context.Context, s *flag.FlagSet, app Application, args []string) (resultErr error) {
+	p := prepareFlags(s, app, nil)
+	return run(ctx, s, app, p, args)
+}
+
+// RunInherited is like [Run], but additionally registers the flag-tagged
+// fields of parent onto s. App's fields are registered first; any of
+// parent's flags whose names collide with an already-registered flag are
+// silently skipped, so app's declarations win on conflict. Both app and
+// parent write to their own pointer targets, so RunInherited can set
+// parent-level state (e.g., a verbose flag declared on the parent) when
+// the flag appears alongside a subcommand represented by app.
+//
+// If either app or parent embeds [Profile], profile flags are honored.
+// App's [Profile] is preferred when both are present.
+func RunInherited(ctx context.Context, s *flag.FlagSet, app, parent Application, args []string) (resultErr error) {
+	p := prepareFlags(s, app, parent)
+	return run(ctx, s, app, p, args)
+}
+
+// prepareFlags sets s.Usage and registers app's flags on s. If parent is
+// non-nil, its flags are also registered, skipping any whose names are
+// already claimed by app. Returns the [Profile] pointer to use for
+// profile setup (app's if present, otherwise parent's).
+func prepareFlags(s *flag.FlagSet, app, parent Application) *Profile {
 	s.Usage = func() {
 		if app.ShortHelp() != "" {
 			fmt.Fprintf(s.Output(), "%s\n\nUsage:\n  ", app.ShortHelp())
@@ -123,7 +147,19 @@ func Run(ctx context.Context, s *flag.FlagSet, app Application, args []string) (
 		}
 		app.DetailedHelp(s)
 	}
-	p := addFlags(s, reflect.StructField{}, reflect.ValueOf(app))
+	p := addFlags(s, reflect.StructField{}, reflect.ValueOf(app), false)
+	if parent != nil {
+		pp := addFlags(s, reflect.StructField{}, reflect.ValueOf(parent), true)
+		if p == nil {
+			p = pp
+		}
+	}
+	return p
+}
+
+// run parses args and dispatches to app.Run, setting up any profiling
+// requested via p along the way.
+func run(ctx context.Context, s *flag.FlagSet, app Application, p *Profile, args []string) (resultErr error) {
 	if err := s.Parse(args); err != nil {
 		return err
 	}
@@ -213,9 +249,12 @@ func Run(ctx context.Context, s *flag.FlagSet, app Application, args []string) (
 	return app.Run(ctx, s.Args()...)
 }
 
-// addFlags scans fields of structs recursively to find things with flag tags
-// and add them to the flag set.
-func addFlags(f *flag.FlagSet, field reflect.StructField, value reflect.Value) *Profile {
+// addFlags scans fields of structs recursively to find things with flag
+// tags and adds them to the flag set. If skipExisting is true, any flag
+// group whose names are already present in f is silently skipped; this
+// lets [RunInherited] register a parent's flags without colliding with
+// a subcommand's prior declarations.
+func addFlags(f *flag.FlagSet, field reflect.StructField, value reflect.Value, skipExisting bool) *Profile {
 	// is it a field we are allowed to reflect on?
 	if field.PkgPath != "" {
 		return nil
@@ -225,6 +264,15 @@ func addFlags(f *flag.FlagSet, field reflect.StructField, value reflect.Value) *
 	help := field.Tag.Get("help")
 	if isFlag {
 		nameList := strings.Split(flagNames, ",")
+		if skipExisting {
+			// A collision on any alias skips the whole group, so a
+			// subcommand's declaration fully shadows a parent's.
+			for _, n := range nameList {
+				if f.Lookup(n) != nil {
+					return nil
+				}
+			}
+		}
 		// add the main flag
 		addFlag(f, value, nameList[0], help)
 		if len(nameList) > 1 {
@@ -254,7 +302,7 @@ func addFlags(f *flag.FlagSet, field reflect.StructField, value reflect.Value) *
 			v = v.Addr()
 		}
 		// check if that field is a flag or contains flags
-		if fp := addFlags(f, child, v); fp != nil {
+		if fp := addFlags(f, child, v, skipExisting); fp != nil {
 			p = fp
 		}
 	}
