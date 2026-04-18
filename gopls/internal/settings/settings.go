@@ -836,6 +836,17 @@ type InternalOptions struct {
 	// TODO(rfindley): make pull diagnostics robust, and remove this option,
 	// allowing pull diagnostics by default.
 	PullDiagnostics bool
+
+	// WantsPushDiagnostics records whether the connecting client wants
+	// server-initiated publishDiagnostics notifications. It is per-
+	// connection (not a global gopls setting): a CLI client that doesn't
+	// render diagnostics passes false to suppress push and to opt out of
+	// being counted as a pool-scoped push subscriber, which in turn lets a
+	// pooled session skip the modification-triggered diagnose pass when no
+	// other connection wants push. See proposal §3.1, §4.
+	//
+	// Defaults true so omission preserves IDE behavior.
+	WantsPushDiagnostics bool
 }
 
 type FileWatcherMode string
@@ -1408,6 +1419,9 @@ func (o *Options) setOne(name string, value any) (applied []CounterPath, _ error
 
 	case "pullDiagnostics":
 		return setBool(&o.PullDiagnostics, value)
+
+	case "wantsPushDiagnostics":
+		return setBool(&o.WantsPushDiagnostics, value)
 
 	case "mcpTools":
 		return setBoolMap(&o.MCPTools, value)

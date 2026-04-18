@@ -131,7 +131,7 @@ func New(session *cache.Session, client protocol.ClientCloser, options *settings
 		progress:             progress.NewTracker(client),
 		options:              options,
 		viewsToDiagnose:      make(map[*cache.View]uint64),
-		wantsPushDiagnostics: true, // Stage 3b: default on; CLI-specific opt-out lands in Stage 4.
+		wantsPushDiagnostics: true, // Default; Initialize re-reads from settings.WantsPushDiagnostics.
 	}
 }
 
@@ -214,10 +214,11 @@ type server struct {
 	// wantsPushDiagnostics records whether this connection wants
 	// server-initiated publishDiagnostics notifications. When false,
 	// the server suppresses publishDiagnostics for this connection and
-	// does not count it as a pool-scoped push subscriber. Stage 3b
-	// defaults this true for every connection (the status quo); a
-	// future CLI profile can flip it false via initialize options.
-	// See proposal §3.1, §4.
+	// does not count it as a pool-scoped push subscriber. Populated in
+	// Initialize from settings.WantsPushDiagnostics (which the client
+	// may set via initializationOptions). Defaults true so omission
+	// preserves IDE behavior; CLI profiles pass false to opt out. See
+	// proposal §3.1, §4.
 	wantsPushDiagnostics bool
 
 	// changedFiles tracks files for which there has been a textDocument/didChange.
