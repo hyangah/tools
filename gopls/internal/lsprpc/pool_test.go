@@ -164,6 +164,39 @@ func TestSessionPool_DifferentKeys(t *testing.T) {
 	p.release(keyB)
 }
 
+func TestSessionPool_SubscribeCounter(t *testing.T) {
+	c := cache.New(nil)
+	p := newSessionPool(c, time.Minute)
+	defer p.shutdown()
+
+	key := poolKey{root: "/project"}
+	session := cache.NewSession(t.Context(), c)
+	_, entry := p.register(key, session)
+	defer p.release(key)
+
+	if entry.HasPushSubscribers() {
+		t.Fatalf("fresh entry reports HasPushSubscribers = true, want false")
+	}
+	entry.Subscribe()
+	entry.Subscribe()
+	if !entry.HasPushSubscribers() {
+		t.Fatalf("after two Subscribe calls HasPushSubscribers = false, want true")
+	}
+	entry.Unsubscribe()
+	if !entry.HasPushSubscribers() {
+		t.Fatalf("after 2 Subscribe + 1 Unsubscribe HasPushSubscribers = false, want true")
+	}
+	entry.Unsubscribe()
+	if entry.HasPushSubscribers() {
+		t.Fatalf("after balanced Subscribe/Unsubscribe HasPushSubscribers = true, want false")
+	}
+	// Defensive: extra Unsubscribe must not underflow.
+	entry.Unsubscribe()
+	if entry.HasPushSubscribers() {
+		t.Fatalf("extra Unsubscribe left HasPushSubscribers = true, want false")
+	}
+}
+
 func TestSessionPool_Shutdown(t *testing.T) {
 	c := cache.New(nil)
 	p := newSessionPool(c, time.Minute)

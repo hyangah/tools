@@ -415,6 +415,18 @@ func (s *server) addFolders(ctx context.Context, folders []protocol.WorkspaceFol
 		}
 	}
 
+	// Register this connection as a push-diagnostic subscriber on the
+	// pool entry, exactly once per connection lifetime. addFolders may
+	// be invoked multiple times (DidChangeWorkspaceFolders, implicit
+	// folder creation on unknown-URI DidOpen); the poolSubscribed guard
+	// prevents leaking the counter. Only subscribe when this connection
+	// wants push diagnostics — a CLI profile (Stage 4) can opt out by
+	// flipping wantsPushDiagnostics false. See proposal §3.1.
+	if s.poolEntry != nil && !s.poolSubscribed && s.wantsPushDiagnostics {
+		s.poolEntry.Subscribe()
+		s.poolSubscribed = true
+	}
+
 	// Register for file watching notifications, if they are supported.
 	if err := s.updateWatchedDirectories(ctx); err != nil {
 		event.Error(ctx, "failed to register for file watching notifications", err)
@@ -807,6 +819,13 @@ func (s *server) Shutdown(ctx context.Context) error {
 			s.web.server.Shutdown(ctx) // ignore error
 		}
 
+		// Release the push-diagnostic subscription before handing the
+		// session back to the pool, so HasPushSubscribers() reflects the
+		// correct count as soon as onShutdown returns.
+		if s.poolSubscribed && s.poolEntry != nil {
+			s.poolEntry.Unsubscribe()
+			s.poolSubscribed = false
+		}
 		if s.onShutdown != nil {
 			// The session is pooled; release it back to the pool
 			// instead of destroying it.

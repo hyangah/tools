@@ -58,6 +58,14 @@ type pooledSession struct {
 	watcherMu   sync.Mutex
 	watcher     filewatcher.Watcher // nil until first EnsureWatcher (or after closeWatcher)
 	watchedDirs map[string]struct{} // cross-connection dedup for fsnotify (non-idempotent Add)
+
+	// Push-diagnostic subscribers. Tracked so the compute path (Stage 3c)
+	// can skip the diagnose goroutine when no attached connection wants
+	// a publishDiagnostics fan-out. Stage 3a keeps the scaffolding only:
+	// every connection increments on attach and decrements on shutdown;
+	// capability-based opt-out comes in Stage 3b. See proposal §3.1.
+	subsMu          sync.Mutex
+	pushSubscribers int
 }
 
 // EnsureWatcher implements server.PoolEntry. It creates the pool-scoped
@@ -110,6 +118,36 @@ func (ps *pooledSession) Poke() {
 	if ps.watcher != nil {
 		ps.watcher.Poke()
 	}
+}
+
+// Subscribe implements server.PoolEntry. It increments the pool-scoped
+// push-diagnostic subscriber count. Each attached *server that wants
+// push-model publishDiagnostics calls this once on initialize.
+func (ps *pooledSession) Subscribe() {
+	ps.subsMu.Lock()
+	defer ps.subsMu.Unlock()
+	ps.pushSubscribers++
+}
+
+// Unsubscribe implements server.PoolEntry. It decrements the subscriber
+// count; callers must have previously called Subscribe exactly once.
+func (ps *pooledSession) Unsubscribe() {
+	ps.subsMu.Lock()
+	defer ps.subsMu.Unlock()
+	if ps.pushSubscribers == 0 {
+		// Defensive: never drop below zero. Should not happen if callers
+		// pair Subscribe/Unsubscribe correctly.
+		return
+	}
+	ps.pushSubscribers--
+}
+
+// HasPushSubscribers implements server.PoolEntry. Returns true if at
+// least one attached connection is subscribed to push diagnostics.
+func (ps *pooledSession) HasPushSubscribers() bool {
+	ps.subsMu.Lock()
+	defer ps.subsMu.Unlock()
+	return ps.pushSubscribers > 0
 }
 
 // closeWatcher stops and discards the pool-scoped watcher. Called by
