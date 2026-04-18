@@ -42,6 +42,8 @@ Commands:
   vet       Report diagnostics from the cmd/vet analyzer suite
   format    Reformat files (prints, or -w/-d/-l for write/diff/list)
   imports   Organize imports (prints, or -w/-d/-l for write/diff/list)
+  codeaction List code actions at FILE:LINE:COL (--kind filters)
+  fix       Apply a code action at FILE:LINE:COL (--kind selects; -w/-d/-l)
 
 Examples:
   $ gopls cli def ./main.go:10:5

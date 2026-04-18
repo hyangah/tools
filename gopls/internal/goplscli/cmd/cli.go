@@ -33,7 +33,7 @@ import (
 func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []string, w io.Writer) (exitCode int) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: gopls cli <command> [args]")
-		fmt.Fprintln(os.Stderr, "commands: def, refs, hover, impl, symbols, wsymbols, rename, check, vet, format, imports")
+		fmt.Fprintln(os.Stderr, "commands: def, refs, hover, impl, symbols, wsymbols, rename, check, vet, format, imports, codeaction, fix")
 		return 2
 	}
 
@@ -51,6 +51,18 @@ func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []st
 		return code
 	case "imports":
 		code, err := runImports(ctx, server, jsonOutput, subArgs, w)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		}
+		return code
+	case "codeaction":
+		code, err := runCodeAction(ctx, server, jsonOutput, subArgs, w)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		}
+		return code
+	case "fix":
+		code, err := runFix(ctx, server, jsonOutput, subArgs, w)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		}
