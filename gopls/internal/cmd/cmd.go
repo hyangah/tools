@@ -43,8 +43,9 @@ import (
 // A zero value (or nil pointer to it) means "IDE-like defaults": the
 // legacy behavior before capability profiles were introduced. The
 // `gopls cli` command passes a non-default profile to declare that the
-// client does not render push diagnostics and does not need work-done
-// progress. See proposal §3.1, §4.
+// client does not render push diagnostics, does not need work-done
+// progress, and does not send DidOpen before queries. See proposal
+// §3.1, §4.
 type clientProfile struct {
 	// wantsPushDiagnostics advertises to the server (via
 	// initializationOptions) whether this client wants server-initiated
@@ -58,6 +59,15 @@ type clientProfile struct {
 	// clients set this false; progress notifications over a short-lived
 	// connection are noise.
 	workDoneProgress bool
+
+	// skipDidOpen, when true, tells subcommand dispatch to bypass the
+	// cliServer wrapper that normally sends textDocument/didOpen before
+	// each query. CLI clients have no unsaved buffers: disk is
+	// authoritative, and with Stage 1's session-scoped watcher the
+	// pooled snapshot tracks disk across connections without DidOpen
+	// priming. See proposal §4 and the 2026-04-18 investigation note in
+	// gopls/CLAUDE.md.
+	skipDidOpen bool
 }
 
 // defaultClientProfile is the capability profile used by legacy
@@ -67,15 +77,18 @@ type clientProfile struct {
 var defaultClientProfile = clientProfile{
 	wantsPushDiagnostics: true,
 	workDoneProgress:     true,
+	skipDidOpen:          false,
 }
 
 // cliClientProfile is the capability profile used by `gopls cli`
-// subcommands. It declares no push diagnostics and no progress.
-// Per-subcommand refinements (e.g., advertising textDocument.diagnostic
-// for check/codeaction) will be layered on top in a later stage.
+// subcommands. It declares no push diagnostics, no progress, and skips
+// DidOpen. Per-subcommand refinements (e.g., advertising
+// textDocument.diagnostic for check/codeaction) will be layered on top
+// in a later stage.
 var cliClientProfile = clientProfile{
 	wantsPushDiagnostics: false,
 	workDoneProgress:     false,
+	skipDidOpen:          true,
 }
 
 // Application is the main application as passed to tool.Main
