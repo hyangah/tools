@@ -33,11 +33,29 @@ import (
 func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []string, w io.Writer) (exitCode int) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: gopls cli <command> [args]")
-		fmt.Fprintln(os.Stderr, "commands: def, refs, hover, impl, symbols, wsymbols, rename, check, vet")
+		fmt.Fprintln(os.Stderr, "commands: def, refs, hover, impl, symbols, wsymbols, rename, check, vet, format, imports")
 		return 2
 	}
 
 	sub, subArgs := args[0], args[1:]
+
+	// Edit-producing subcommands (format, imports, fix) handle their own
+	// output because the edit-mode flags (-w/-d/-l) control side effects
+	// and per-file rendering that don't fit the result→printer pipeline.
+	switch sub {
+	case "format":
+		code, err := runFormat(ctx, server, jsonOutput, subArgs, w)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		}
+		return code
+	case "imports":
+		code, err := runImports(ctx, server, jsonOutput, subArgs, w)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		}
+		return code
+	}
 
 	var result any
 	var err error

@@ -16,6 +16,8 @@ Commands:
   rename    Rename a symbol (FILE:LINE:COL --to NEWNAME)
   check     Report diagnostics (workspace, or filtered to FILE...)
   vet       Report diagnostics from the cmd/vet analyzer suite
+  format    Reformat files (prints, or -w/-d/-l for write/diff/list)
+  imports   Organize imports (prints, or -w/-d/-l for write/diff/list)
 
 Examples:
   $ gopls cli def ./main.go:10:5
