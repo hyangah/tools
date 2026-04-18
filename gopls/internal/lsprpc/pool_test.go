@@ -16,8 +16,8 @@ func TestSessionPool_AcquireEmpty(t *testing.T) {
 	p := newSessionPool(c, time.Minute)
 	defer p.shutdown()
 
-	if got := p.acquire(poolKey{root: "/project"}); got != nil {
-		t.Errorf("acquire on empty pool returned %v, want nil", got)
+	if got, entry := p.acquire(poolKey{root: "/project"}); got != nil || entry != nil {
+		t.Errorf("acquire on empty pool returned (%v, %v), want (nil, nil)", got, entry)
 	}
 }
 
@@ -30,7 +30,7 @@ func TestSessionPool_RegisterAndAcquire(t *testing.T) {
 	session := cache.NewSession(t.Context(), c)
 
 	// Register a new session.
-	got := p.register(key, session)
+	got, _ := p.register(key, session)
 	if got != session {
 		t.Fatalf("register returned different session")
 	}
@@ -42,7 +42,7 @@ func TestSessionPool_RegisterAndAcquire(t *testing.T) {
 	p.release(key)
 
 	// Acquire should return the same session.
-	got = p.acquire(key)
+	got, _ = p.acquire(key)
 	if got != session {
 		t.Fatalf("acquire returned %v, want the registered session", got)
 	}
@@ -61,13 +61,13 @@ func TestSessionPool_RegisterRace(t *testing.T) {
 	session2 := cache.NewSession(t.Context(), c)
 
 	// First registration wins.
-	got1 := p.register(key, session1)
+	got1, _ := p.register(key, session1)
 	if got1 != session1 {
 		t.Fatalf("first register returned wrong session")
 	}
 
 	// Second registration for the same key returns the existing session.
-	got2 := p.register(key, session2)
+	got2, _ := p.register(key, session2)
 	if got2 != session1 {
 		t.Fatalf("second register returned %v, want first session", got2)
 	}
@@ -100,7 +100,7 @@ func TestSessionPool_IdleEviction(t *testing.T) {
 	}
 
 	// Acquire should return nil.
-	if got := p.acquire(key); got != nil {
+	if got, _ := p.acquire(key); got != nil {
 		t.Fatalf("acquire after eviction returned %v, want nil", got)
 	}
 }
@@ -117,7 +117,7 @@ func TestSessionPool_IdleEvictionCancelled(t *testing.T) {
 
 	// Acquire before timeout cancels the timer.
 	time.Sleep(30 * time.Millisecond)
-	got := p.acquire(key)
+	got, _ := p.acquire(key)
 	if got != session {
 		t.Fatalf("acquire returned %v, want session", got)
 	}
@@ -151,8 +151,8 @@ func TestSessionPool_DifferentKeys(t *testing.T) {
 	p.release(keyA)
 	p.release(keyB)
 
-	gotA := p.acquire(keyA)
-	gotB := p.acquire(keyB)
+	gotA, _ := p.acquire(keyA)
+	gotB, _ := p.acquire(keyB)
 	if gotA != sessionA {
 		t.Fatalf("acquire(keyA) returned wrong session")
 	}

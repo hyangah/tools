@@ -6,11 +6,16 @@ package lsprpc
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"sync"
 	"time"
 
 	"golang.org/x/tools/gopls/internal/cache"
+	"golang.org/x/tools/gopls/internal/filewatcher"
+	"golang.org/x/tools/gopls/internal/protocol"
+	"golang.org/x/tools/gopls/internal/settings"
+	"golang.org/x/tools/internal/event"
 )
 
 // defaultIdleTimeout is how long a pooled session lives without any active
@@ -36,13 +41,91 @@ type sessionPool struct {
 	sessions    map[poolKey]*pooledSession
 }
 
-// pooledSession wraps a cache.Session with reference counting and idle
-// eviction.
+// pooledSession wraps a cache.Session with reference counting, idle
+// eviction, and a shared file watcher whose lifetime spans connections.
+//
+// The watcher's onChange closure (set once, on first EnsureWatcher) captures
+// the *cache.Session — not any *server — so events continue to invalidate
+// the session's snapshot after a connection shuts down. See
+// kb-gopls-skills/v4/CAPABILITY_DRIVEN_PROPOSAL.md §3.3b and
+// kb-gopls-skills/v4/research/FILE_WATCHER_AUDIT.md.
 type pooledSession struct {
 	session   *cache.Session
 	refCount  int
 	lastUsed  time.Time
 	idleTimer *time.Timer // fires after idle timeout; nil when refCount > 0
+
+	watcherMu   sync.Mutex
+	watcher     filewatcher.Watcher // nil until first EnsureWatcher (or after closeWatcher)
+	watchedDirs map[string]struct{} // cross-connection dedup for fsnotify (non-idempotent Add)
+}
+
+// EnsureWatcher implements server.PoolEntry. It creates the pool-scoped
+// watcher on first call and is a no-op on subsequent calls (first creator's
+// mode wins; later callers requesting a different mode get a warning).
+func (ps *pooledSession) EnsureWatcher(ctx context.Context, mode settings.FileWatcherMode, onChange func([]protocol.FileEvent), onError func(error)) error {
+	ps.watcherMu.Lock()
+	defer ps.watcherMu.Unlock()
+	if ps.watcher != nil {
+		if ps.watcher.Mode() != mode {
+			event.Log(ctx, fmt.Sprintf(
+				"pool watcher mode is %q; ignoring request for %q from a later connection",
+				ps.watcher.Mode(), mode))
+		}
+		return nil
+	}
+	if mode == settings.FileWatcherOff {
+		return nil
+	}
+	w, err := filewatcher.New(mode, nil, onChange, onError)
+	if err != nil {
+		return err
+	}
+	ps.watcher = w
+	ps.watchedDirs = make(map[string]struct{})
+	return nil
+}
+
+// WatchDir implements server.PoolEntry.
+func (ps *pooledSession) WatchDir(ctx context.Context, dir string) error {
+	ps.watcherMu.Lock()
+	defer ps.watcherMu.Unlock()
+	if ps.watcher == nil {
+		return nil
+	}
+	if _, ok := ps.watchedDirs[dir]; ok {
+		return nil
+	}
+	if err := ps.watcher.WatchDir(dir); err != nil {
+		return err
+	}
+	ps.watchedDirs[dir] = struct{}{}
+	return nil
+}
+
+// Poke implements server.PoolEntry.
+func (ps *pooledSession) Poke() {
+	ps.watcherMu.Lock()
+	defer ps.watcherMu.Unlock()
+	if ps.watcher != nil {
+		ps.watcher.Poke()
+	}
+}
+
+// closeWatcher stops and discards the pool-scoped watcher. Called by
+// sessionPool.evict (and shutdown) before cache.Session.Shutdown, so
+// in-flight watcher events cannot race a shutting-down session.
+func (ps *pooledSession) closeWatcher() {
+	ps.watcherMu.Lock()
+	defer ps.watcherMu.Unlock()
+	if ps.watcher == nil {
+		return
+	}
+	if err := ps.watcher.Close(); err != nil {
+		event.Error(context.Background(), "closing pool watcher", err)
+	}
+	ps.watcher = nil
+	ps.watchedDirs = nil
 }
 
 // newSessionPool creates a session pool that shares the given cache.
@@ -57,14 +140,15 @@ func newSessionPool(c *cache.Cache, idleTimeout time.Duration) *sessionPool {
 	}
 }
 
-// acquire returns a warm session for the given key, incrementing its
-// reference count. Returns nil if no session exists for the key.
-func (p *sessionPool) acquire(key poolKey) *cache.Session {
+// acquire returns a warm session for the given key along with its pool
+// entry, incrementing the reference count. Returns (nil, nil) if no session
+// exists for the key.
+func (p *sessionPool) acquire(key poolKey) (*cache.Session, *pooledSession) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	ps, ok := p.sessions[key]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if ps.idleTimer != nil {
 		ps.idleTimer.Stop()
@@ -72,14 +156,15 @@ func (p *sessionPool) acquire(key poolKey) *cache.Session {
 	}
 	ps.refCount++
 	ps.lastUsed = time.Now()
-	return ps.session
+	return ps.session, ps
 }
 
 // register adds a newly created session to the pool and sets its reference
-// count to 1. If a session already exists for this key (race between two
-// concurrent cold starts), the existing session is returned and the caller
-// should discard the one it created.
-func (p *sessionPool) register(key poolKey, session *cache.Session) *cache.Session {
+// count to 1. Returns (winning-session, winning-entry). If a session already
+// exists for this key (race between two concurrent cold starts), the winning
+// session is the existing one and the caller should discard the one it
+// created.
+func (p *sessionPool) register(key poolKey, session *cache.Session) (*cache.Session, *pooledSession) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if ps, ok := p.sessions[key]; ok {
@@ -90,14 +175,15 @@ func (p *sessionPool) register(key poolKey, session *cache.Session) *cache.Sessi
 		}
 		ps.refCount++
 		ps.lastUsed = time.Now()
-		return ps.session
+		return ps.session, ps
 	}
-	p.sessions[key] = &pooledSession{
+	ps := &pooledSession{
 		session:  session,
 		refCount: 1,
 		lastUsed: time.Now(),
 	}
-	return session
+	p.sessions[key] = ps
+	return session, ps
 }
 
 // release decrements the reference count for the given key. When the count
@@ -123,6 +209,8 @@ func (p *sessionPool) release(key poolKey) {
 
 // evict removes the session for key from the pool and shuts it down,
 // but only if no new connections have arrived since the timer was set.
+// The pool-scoped watcher (if any) is closed before session shutdown to
+// avoid racing in-flight file events against a terminating session.
 func (p *sessionPool) evict(key poolKey) {
 	p.mu.Lock()
 	ps, ok := p.sessions[key]
@@ -132,6 +220,7 @@ func (p *sessionPool) evict(key poolKey) {
 	}
 	delete(p.sessions, key)
 	p.mu.Unlock()
+	ps.closeWatcher()
 	ps.session.Shutdown(context.Background())
 }
 
@@ -154,6 +243,7 @@ func (p *sessionPool) shutdown() {
 		if ps.idleTimer != nil {
 			ps.idleTimer.Stop()
 		}
+		ps.closeWatcher()
 		ps.session.Shutdown(context.Background())
 	}
 }
