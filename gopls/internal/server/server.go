@@ -82,6 +82,20 @@ type PoolEntry interface {
 	// Poke wakes the pool watcher's quiescent scan loop, if any. No-op
 	// when no watcher has been created.
 	Poke()
+
+	// Subscribe registers this connection as a push-diagnostic subscriber
+	// on the pool entry. Callers must pair it with exactly one Unsubscribe
+	// on connection shutdown. See proposal §3.1.
+	Subscribe()
+
+	// Unsubscribe decrements the subscriber count previously added by
+	// Subscribe. Must be called exactly once per Subscribe.
+	Unsubscribe()
+
+	// HasPushSubscribers reports whether any attached connection wants
+	// push-model publishDiagnostics. Stage 3c's compute gate and Stage 3c′'s
+	// fan-out both read this.
+	HasPushSubscribers() bool
 }
 
 // New creates an LSP server and binds it to handle incoming client
@@ -92,15 +106,16 @@ func New(session *cache.Session, client protocol.ClientCloser, options *settings
 	// upgrade, it means that one or more new methods need new
 	// stub declarations in unimplemented.go.
 	return &server{
-		diagnostics:         make(map[protocol.DocumentURI]*fileDiagnostics),
-		watchedGlobPatterns: nil, // empty
-		changedFiles:        make(map[protocol.DocumentURI]unit),
-		session:             session,
-		client:              client,
-		diagnosticsSema:     make(chan unit, concurrentAnalyses),
-		progress:            progress.NewTracker(client),
-		options:             options,
-		viewsToDiagnose:     make(map[*cache.View]uint64),
+		diagnostics:          make(map[protocol.DocumentURI]*fileDiagnostics),
+		watchedGlobPatterns:  nil, // empty
+		changedFiles:         make(map[protocol.DocumentURI]unit),
+		session:              session,
+		client:               client,
+		diagnosticsSema:      make(chan unit, concurrentAnalyses),
+		progress:             progress.NewTracker(client),
+		options:              options,
+		viewsToDiagnose:      make(map[*cache.View]uint64),
+		wantsPushDiagnostics: true, // Stage 3b: default on; CLI-specific opt-out lands in Stage 4.
 	}
 }
 
@@ -172,6 +187,20 @@ type server struct {
 	// (notably the file watcher) shared across connections to the same
 	// pooled session. Populated via sessionSwapHook / postInitHook.
 	poolEntry PoolEntry
+
+	// poolSubscribed is true once this server has called
+	// poolEntry.Subscribe. Used so Shutdown calls Unsubscribe exactly
+	// once per Subscribe, regardless of how often Shutdown fires.
+	poolSubscribed bool
+
+	// wantsPushDiagnostics records whether this connection wants
+	// server-initiated publishDiagnostics notifications. When false,
+	// the server suppresses publishDiagnostics for this connection and
+	// does not count it as a pool-scoped push subscriber. Stage 3b
+	// defaults this true for every connection (the status quo); a
+	// future CLI profile can flip it false via initialize options.
+	// See proposal §3.1, §4.
+	wantsPushDiagnostics bool
 
 	// changedFiles tracks files for which there has been a textDocument/didChange.
 	changedFilesMu sync.Mutex

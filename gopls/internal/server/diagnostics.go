@@ -891,8 +891,12 @@ func (s *server) publishFileDiagnosticsLocked(ctx context.Context, views viewSet
 	}
 	sortDiagnostics(unique)
 
-	// Publish, if necessary.
-	if hash != f.publishedHash || f.mustPublish {
+	// Publish, if necessary. The gate on s.wantsPushDiagnostics lets a
+	// connection opt out of receiving server-initiated publishDiagnostics
+	// notifications entirely; when false we also skip the hash/mustPublish
+	// bookkeeping so the per-connection dedup state mirrors what the client
+	// has actually received (nothing). See proposal §3.1.
+	if s.wantsPushDiagnostics && (hash != f.publishedHash || f.mustPublish) {
 		if err := s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 			Diagnostics: cache.ToProtocolDiagnostics(unique...),
 			URI:         uri,
