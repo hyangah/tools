@@ -90,17 +90,17 @@ func (s *StreamServer) EnableSessionPool(idleTimeout time.Duration) {
 // On pool miss, it returns nil — registration is handled by the
 // PostInitHook (see makePostInitHook).
 func (s *StreamServer) makeSessionSwapHook() server.SessionSwapHook {
-	return func(ctx context.Context, folders []protocol.WorkspaceFolder) (*cache.Session, func()) {
+	return func(ctx context.Context, folders []protocol.WorkspaceFolder) (*cache.Session, server.PoolEntry, func()) {
 		root := detectWorkspaceRoot(folders)
 		if root == "" {
-			return nil, nil
+			return nil, nil, nil
 		}
 		key := poolKey{root: root}
 
-		if pooled := s.pool.acquire(key); pooled != nil {
-			return pooled, func() { s.pool.release(key) }
+		if pooled, entry := s.pool.acquire(key); pooled != nil {
+			return pooled, entry, func() { s.pool.release(key) }
 		}
-		return nil, nil
+		return nil, nil, nil
 	}
 }
 
@@ -108,21 +108,21 @@ func (s *StreamServer) makeSessionSwapHook() server.SessionSwapHook {
 // the pool after addFolders has created Views. This handles the pool-miss
 // case: the session now has warm Views and is ready for reuse.
 func (s *StreamServer) makePostInitHook() server.PostInitHook {
-	return func(ctx context.Context, session *cache.Session, folders []protocol.WorkspaceFolder) func() {
+	return func(ctx context.Context, session *cache.Session, folders []protocol.WorkspaceFolder) (server.PoolEntry, func()) {
 		root := detectWorkspaceRoot(folders)
 		if root == "" {
-			return nil
+			return nil, nil
 		}
 		key := poolKey{root: root}
-		winner := s.pool.register(key, session)
+		winner, entry := s.pool.register(key, session)
 		if winner != session {
 			// Another connection raced and registered first.
 			// The server still has the temporary session; we can't
 			// swap at this point. The temporary session will be shut
 			// down normally. The winner is already in the pool.
-			return nil
+			return nil, nil
 		}
-		return func() { s.pool.release(key) }
+		return entry, func() { s.pool.release(key) }
 	}
 }
 

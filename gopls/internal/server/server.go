@@ -39,19 +39,50 @@ import (
 
 // SessionSwapHook is called at the start of addFolders to optionally swap
 // the server's session for a pooled one. If the hook returns a non-nil
-// session, the server's session is replaced and releaseFunc is called when
-// the server shuts down (instead of session.Shutdown). If the hook returns
-// nil, the server proceeds with its original session.
+// session, the server's session is replaced, entry (if non-nil) is the
+// pool-scoped handle for that session, and releaseFunc is called when the
+// server shuts down (instead of session.Shutdown). If the hook returns a
+// nil session, the server proceeds with its original session.
 //
 // The hook receives the workspace folders from the initialize request, which
 // it can use to determine the pool key.
-type SessionSwapHook func(ctx context.Context, folders []protocol.WorkspaceFolder) (session *cache.Session, releaseFunc func())
+type SessionSwapHook func(ctx context.Context, folders []protocol.WorkspaceFolder) (session *cache.Session, entry PoolEntry, releaseFunc func())
 
 // PostInitHook is called at the end of addFolders, after Views have been
 // created (or found to already exist). It receives the server's current
 // session and workspace folders. Used by the session pool to register
-// newly-initialized sessions on pool miss.
-type PostInitHook func(ctx context.Context, session *cache.Session, folders []protocol.WorkspaceFolder) (releaseFunc func())
+// newly-initialized sessions on pool miss. On successful registration, the
+// hook returns the pool-scoped handle and a release func; on race loss
+// (another connection registered first) both are nil.
+type PostInitHook func(ctx context.Context, session *cache.Session, folders []protocol.WorkspaceFolder) (entry PoolEntry, releaseFunc func())
+
+// PoolEntry is the handle a *server uses to reach shared, pool-scoped
+// resources that outlive any single connection. It is populated from the
+// SessionSwapHook or PostInitHook returns when session pooling is enabled.
+//
+// The methods are safe to call from multiple *server instances attached to
+// the same pool entry.
+type PoolEntry interface {
+	// EnsureWatcher creates the pool-scoped file watcher in the given mode
+	// if one does not yet exist for this pool entry. The first creator's
+	// mode is sticky for the entry's lifetime; later attachers requesting
+	// a different mode get a warning but keep the existing watcher.
+	//
+	// The onChange and onError callbacks are captured only on creation
+	// (first call); callers pass them every time for convenience, but
+	// subsequent calls ignore them. Callbacks must not reference any
+	// particular *server since they outlive individual connections.
+	EnsureWatcher(ctx context.Context, mode settings.FileWatcherMode, onChange func([]protocol.FileEvent), onError func(error)) error
+
+	// WatchDir adds dir to the pool watcher's watched set. Idempotent
+	// across connections: the pool entry de-duplicates directories, which
+	// is required for the fsnotify backend (whose Add is not idempotent).
+	WatchDir(ctx context.Context, dir string) error
+
+	// Poke wakes the pool watcher's quiescent scan loop, if any. No-op
+	// when no watcher has been created.
+	Poke()
+}
 
 // New creates an LSP server and binds it to handle incoming client
 // messages on the supplied stream.
@@ -136,6 +167,12 @@ type server struct {
 	// server Shutdown. Used to release a pooled session back to the pool
 	// rather than destroying it.
 	onShutdown func()
+
+	// poolEntry, if non-nil, provides access to pool-scoped resources
+	// (notably the file watcher) shared across connections to the same
+	// pooled session. Populated via sessionSwapHook / postInitHook.
+	poolEntry PoolEntry
+
 
 	// changedFiles tracks files for which there has been a textDocument/didChange.
 	changedFilesMu sync.Mutex

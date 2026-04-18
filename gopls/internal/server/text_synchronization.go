@@ -220,11 +220,15 @@ func (s *server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 
 func (s *server) didModifyFiles(ctx context.Context, modifications []file.Modification, cause ModificationSource) error {
 	// Something happened. Wake up a quiescent file watcher.
-	s.fileWatcherMu.Lock()
-	if s.fileWatcher != nil {
-		s.fileWatcher.Poke()
+	if s.poolEntry != nil {
+		s.poolEntry.Poke()
+	} else {
+		s.fileWatcherMu.Lock()
+		if s.fileWatcher != nil {
+			s.fileWatcher.Poke()
+		}
+		s.fileWatcherMu.Unlock()
 	}
-	s.fileWatcherMu.Unlock()
 
 	// wg guards two conditions:
 	//  1. didModifyFiles is complete

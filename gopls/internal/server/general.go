@@ -320,10 +320,11 @@ func (s *server) addFolders(ctx context.Context, folders []protocol.WorkspaceFol
 	// If a session swap hook is set, try to swap to a pooled session.
 	// This must happen before any Views are created on the temporary session.
 	if s.sessionSwapHook != nil {
-		if pooledSession, releaseFunc := s.sessionSwapHook(ctx, folders); pooledSession != nil {
+		if pooledSession, entry, releaseFunc := s.sessionSwapHook(ctx, folders); pooledSession != nil {
 			oldSession := s.session
 			s.session = pooledSession
 			s.onShutdown = releaseFunc
+			s.poolEntry = entry
 			oldSession.Shutdown(ctx) // cheap: no Views on the temporary session
 		}
 	}
@@ -408,8 +409,9 @@ func (s *server) addFolders(ctx context.Context, folders []protocol.WorkspaceFol
 	// If a post-init hook is set, call it now that Views are warm.
 	// This is used by the session pool to register newly-created sessions.
 	if s.postInitHook != nil && s.onShutdown == nil {
-		if releaseFunc := s.postInitHook(ctx, s.session, folders); releaseFunc != nil {
+		if entry, releaseFunc := s.postInitHook(ctx, s.session, folders); releaseFunc != nil {
 			s.onShutdown = releaseFunc
+			s.poolEntry = entry
 		}
 	}
 
@@ -478,8 +480,70 @@ func (s *server) updateWatchedDirectories(ctx context.Context) error {
 // updateServerSideWatcher synchronizes the file watcher's lifecycle with the
 // current session settings (creating, replacing, or closing it as needed)
 // and updates the directories it monitors based on the provided patterns.
+//
+// When the server is attached to a pool entry (session pooling is enabled),
+// the watcher lives on the pool entry so it survives across connection
+// shutdowns and correctly invalidates the shared session when disk content
+// changes in the gap between connections. See
+// kb-gopls-skills/v4/CAPABILITY_DRIVEN_PROPOSAL.md §3.3b for design rationale
+// and research/FILE_WATCHER_AUDIT.md for the bug this closes.
+//
+// When not pooled, the watcher remains local to *server. TODO: when
+// EnableSessionPool becomes the default across gopls deployments, the
+// non-pooled fallback below can be retired.
 func (s *server) updateServerSideWatcher(ctx context.Context, patterns map[protocol.RelativePattern]unit) error {
 	wantMode := s.Options().FileWatcher
+
+	dirs := make(map[string]struct{})
+	for pattern := range patterns {
+		if pattern.BaseURI != "" {
+			dirs[pattern.BaseURI.Path()] = struct{}{}
+		}
+	}
+
+	if s.poolEntry != nil {
+		// Pool-scoped path: the watcher is shared with any other servers
+		// attached to the same pooled session. The onChange closure captures
+		// the session pointer (stable for the pool entry's lifetime), not s,
+		// so events continue to invalidate the snapshot after this server
+		// shuts down.
+		//
+		// Stage 1 scope: onChange invalidates the session's snapshot but
+		// does NOT fan out publishDiagnostics to any currently attached
+		// *server; Stage 3's compute/publish split (diagSubscribers)
+		// restores that behavior. See proposal §7 for the accepted
+		// regression.
+		session := s.session
+		watcherCtx := xcontext.Detach(ctx)
+		onChange := func(events []protocol.FileEvent) {
+			modifications := make([]file.Modification, len(events))
+			for i, e := range events {
+				modifications[i] = file.Modification{
+					URI:    e.URI,
+					Action: changeTypeToFileAction(e.Type),
+					OnDisk: true,
+				}
+			}
+			if _, err := session.DidModifyFiles(watcherCtx, modifications); err != nil {
+				event.Error(watcherCtx, "pool watcher: DidModifyFiles failed", err)
+			}
+		}
+		onErr := func(err error) {
+			event.Error(watcherCtx, "pool file watcher error", err)
+		}
+		if err := s.poolEntry.EnsureWatcher(ctx, wantMode, onChange, onErr); err != nil {
+			return err
+		}
+		for dir := range dirs {
+			if err := s.poolEntry.WatchDir(ctx, dir); err != nil {
+				// Log warning but continue watching other directories.
+				event.Log(ctx, fmt.Sprintf("failed to watch directory %s: %v", dir, err))
+			}
+		}
+		return nil
+	}
+
+	// Non-pooled fallback.
 	s.fileWatcherMu.Lock()
 	defer s.fileWatcherMu.Unlock()
 
@@ -524,12 +588,6 @@ func (s *server) updateServerSideWatcher(ctx context.Context, patterns map[proto
 	}
 
 	// Inv: s.fileWatcher.Mode() == want
-	dirs := make(map[string]struct{})
-	for pattern := range patterns {
-		if pattern.BaseURI != "" {
-			dirs[pattern.BaseURI.Path()] = struct{}{}
-		}
-	}
 	for dir := range dirs {
 		if err := s.fileWatcher.WatchDir(dir); err != nil {
 			// Log warning but continue watching other directories.
