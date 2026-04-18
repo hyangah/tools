@@ -418,13 +418,13 @@ func (s *server) addFolders(ctx context.Context, folders []protocol.WorkspaceFol
 	// Register this connection as a push-diagnostic subscriber on the
 	// pool entry, exactly once per connection lifetime. addFolders may
 	// be invoked multiple times (DidChangeWorkspaceFolders, implicit
-	// folder creation on unknown-URI DidOpen); the poolSubscribed guard
-	// prevents leaking the counter. Only subscribe when this connection
-	// wants push diagnostics — a CLI profile (Stage 4) can opt out by
-	// flipping wantsPushDiagnostics false. See proposal §3.1.
-	if s.poolEntry != nil && !s.poolSubscribed && s.wantsPushDiagnostics {
-		s.poolEntry.Subscribe()
-		s.poolSubscribed = true
+	// folder creation on unknown-URI DidOpen); the poolSubscription==nil
+	// guard prevents leaking subscriptions. Only subscribe when this
+	// connection wants push diagnostics — a CLI profile (Stage 4) can
+	// opt out by flipping wantsPushDiagnostics false. See proposal §3.1,
+	// §3.3a.
+	if s.poolEntry != nil && s.poolSubscription == nil && s.wantsPushDiagnostics {
+		s.poolSubscription = s.poolEntry.Subscribe(s.onPoolWatcherEvents)
 	}
 
 	// Register for file watching notifications, if they are supported.
@@ -515,35 +515,15 @@ func (s *server) updateServerSideWatcher(ctx context.Context, patterns map[proto
 
 	if s.poolEntry != nil {
 		// Pool-scoped path: the watcher is shared with any other servers
-		// attached to the same pooled session. The onChange closure captures
-		// the session pointer (stable for the pool entry's lifetime), not s,
-		// so events continue to invalidate the snapshot after this server
-		// shuts down.
-		//
-		// Stage 1 scope: onChange invalidates the session's snapshot but
-		// does NOT fan out publishDiagnostics to any currently attached
-		// *server; Stage 3's compute/publish split (diagSubscribers)
-		// restores that behavior. See proposal §7 for the accepted
-		// regression.
-		session := s.session
+		// attached to the same pooled session and fully owned by the pool
+		// entry — onChange (which invalidates the session and fans out to
+		// subscribers) lives in pool.go, so events continue to flow even
+		// after this *server shuts down. See proposal §3.3a/§3.3b.
 		watcherCtx := xcontext.Detach(ctx)
-		onChange := func(events []protocol.FileEvent) {
-			modifications := make([]file.Modification, len(events))
-			for i, e := range events {
-				modifications[i] = file.Modification{
-					URI:    e.URI,
-					Action: changeTypeToFileAction(e.Type),
-					OnDisk: true,
-				}
-			}
-			if _, err := session.DidModifyFiles(watcherCtx, modifications); err != nil {
-				event.Error(watcherCtx, "pool watcher: DidModifyFiles failed", err)
-			}
-		}
 		onErr := func(err error) {
 			event.Error(watcherCtx, "pool file watcher error", err)
 		}
-		if err := s.poolEntry.EnsureWatcher(ctx, wantMode, onChange, onErr); err != nil {
+		if err := s.poolEntry.EnsureWatcher(ctx, wantMode, onErr); err != nil {
 			return err
 		}
 		for dir := range dirs {
@@ -580,7 +560,7 @@ func (s *server) updateServerSideWatcher(ctx context.Context, patterns map[proto
 			for i, e := range events {
 				modifications[i] = file.Modification{
 					URI:    e.URI,
-					Action: changeTypeToFileAction(e.Type),
+					Action: ChangeTypeToFileAction(e.Type),
 					OnDisk: true,
 				}
 			}
@@ -821,10 +801,13 @@ func (s *server) Shutdown(ctx context.Context) error {
 
 		// Release the push-diagnostic subscription before handing the
 		// session back to the pool, so HasPushSubscribers() reflects the
-		// correct count as soon as onShutdown returns.
-		if s.poolSubscribed && s.poolEntry != nil {
-			s.poolEntry.Unsubscribe()
-			s.poolSubscribed = false
+		// correct count as soon as onShutdown returns. Closing the
+		// subscription also unregisters the watcher fan-out callback,
+		// preventing post-Shutdown events from racing into a closed
+		// client pipe.
+		if s.poolSubscription != nil {
+			s.poolSubscription.Close()
+			s.poolSubscription = nil
 		}
 		if s.onShutdown != nil {
 			// The session is pooled; release it back to the pool

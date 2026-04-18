@@ -5,6 +5,7 @@
 package lsprpc
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -290,6 +291,121 @@ var X int
 
 	if got := ss.pool.len(); got != 1 {
 		t.Errorf("pool.len() after reuse = %d, want 1", got)
+	}
+}
+
+// TestSessionPoolWatcherFanOutIntegration exercises Stage 3c′: the
+// pool-scoped file watcher must fan disk-edit events out to currently
+// attached push-diagnostic subscribers, restoring the
+// publishDiagnostics behavior that Stage 1 explicitly regressed.
+//
+// The disk edit must target a file that is *not* open in the editor —
+// for an open file, the session's overlay takes precedence over disk
+// content and no re-diagnose fires. We open main.go (which references
+// lib.X) and then break lib.go on disk; the watcher must fan out, the
+// re-diagnose must run, and publishDiagnostics for main.go (which now
+// has an unresolved-symbol error from the broken lib package) must
+// reach the editor.
+func TestSessionPoolWatcherFanOutIntegration(t *testing.T) {
+	testenv.NeedsTool(t, "go")
+
+	const program = `
+-- go.mod --
+module example.com/fanouttest
+
+go 1.21
+-- main.go --
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println(X)
+}
+-- lib.go --
+package main
+
+var X = 1
+`
+
+	sb, err := fake.NewSandbox(&fake.SandboxConfig{Files: fake.UnpackTxt(program)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Close()
+
+	ss := NewStreamServer(cache.New(nil), false, nil)
+	ss.EnableSessionPool(time.Minute)
+	ts := servertest.NewPipeServer(ss, nil)
+	defer checkClose(t, ts.Close)
+
+	// Channel of (uri, len(diagnostics)) for every publishDiagnostics the
+	// editor receives. Buffered so the server isn't blocked.
+	type pubEvent struct {
+		uri  protocol.DocumentURI
+		ndia int
+	}
+	pubs := make(chan pubEvent, 64)
+	hooks := fake.ClientHooks{
+		OnDiagnostics: func(_ context.Context, params *protocol.PublishDiagnosticsParams) error {
+			pubs <- pubEvent{uri: params.URI, ndia: len(params.Diagnostics)}
+			return nil
+		},
+	}
+
+	// fileWatcher: fsnotify (default is "off"); the pool only creates a
+	// watcher when a non-Off mode is requested.
+	editorCfg := fake.EditorConfig{
+		Settings: map[string]any{"fileWatcher": "fsnotify"},
+	}
+	ed, err := fake.NewEditor(sb, editorCfg).Connect(t.Context(), ts, hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ed.Close(t.Context())
+
+	if err := ed.OpenFile(t.Context(), "main.go"); err != nil {
+		t.Fatal(err)
+	}
+
+	mainURI := ed.DocumentURI("main.go")
+
+	// Drain the initial publishDiagnostics burst (clean main.go).
+	deadline := time.After(5 * time.Second)
+draining:
+	for {
+		select {
+		case <-pubs:
+		case <-time.After(300 * time.Millisecond):
+			break draining
+		case <-deadline:
+			t.Fatal("timed out draining initial publishDiagnostics")
+		}
+	}
+
+	// External disk edit on lib.go (which is *not* opened by the editor —
+	// no overlay shadows the disk content). Removing X breaks main.go's
+	// reference, so a successful fan-out + re-diagnose produces a non-empty
+	// publishDiagnostics for main.go.
+	const brokenLib = "package main\n"
+	if err := os.WriteFile(sb.Workdir.AbsPath("lib.go"), []byte(brokenLib), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// fsnotify debounces for 500ms; allow up to ~10s for the watcher to
+	// fire, session.DidModifyFiles to invalidate, the fan-out callback to
+	// kick the diagnose goroutine, and publishDiagnostics to land on the
+	// editor.
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case ev := <-pubs:
+			if ev.uri == mainURI && ev.ndia > 0 {
+				return // restored fan-out fired; test passes.
+			}
+		case <-timeout:
+			t.Fatalf("did not receive non-empty publishDiagnostics for %s after disk edit (Stage 3c′ fan-out not wired)", mainURI)
+		}
 	}
 }
 

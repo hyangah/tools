@@ -5,10 +5,14 @@
 package lsprpc
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"golang.org/x/tools/gopls/internal/cache"
+	"golang.org/x/tools/gopls/internal/file"
+	"golang.org/x/tools/gopls/internal/protocol"
 )
 
 func TestSessionPool_AcquireEmpty(t *testing.T) {
@@ -174,27 +178,72 @@ func TestSessionPool_SubscribeCounter(t *testing.T) {
 	_, entry := p.register(key, session)
 	defer p.release(key)
 
+	noop := func(context.Context, []file.Modification, map[*cache.View][]protocol.DocumentURI) {}
+
 	if entry.HasPushSubscribers() {
 		t.Fatalf("fresh entry reports HasPushSubscribers = true, want false")
 	}
-	entry.Subscribe()
-	entry.Subscribe()
+	subA := entry.Subscribe(noop)
+	subB := entry.Subscribe(noop)
 	if !entry.HasPushSubscribers() {
 		t.Fatalf("after two Subscribe calls HasPushSubscribers = false, want true")
 	}
-	entry.Unsubscribe()
+	subA.Close()
 	if !entry.HasPushSubscribers() {
-		t.Fatalf("after 2 Subscribe + 1 Unsubscribe HasPushSubscribers = false, want true")
+		t.Fatalf("after 2 Subscribe + 1 Close HasPushSubscribers = false, want true")
 	}
-	entry.Unsubscribe()
+	subB.Close()
 	if entry.HasPushSubscribers() {
-		t.Fatalf("after balanced Subscribe/Unsubscribe HasPushSubscribers = true, want false")
+		t.Fatalf("after balanced Subscribe/Close HasPushSubscribers = true, want false")
 	}
-	// Defensive: extra Unsubscribe must not underflow.
-	entry.Unsubscribe()
+	// Defensive: extra Close on an already-closed Subscription must not
+	// drop the count below zero or panic.
+	subB.Close()
 	if entry.HasPushSubscribers() {
-		t.Fatalf("extra Unsubscribe left HasPushSubscribers = true, want false")
+		t.Fatalf("extra Close left HasPushSubscribers = true, want false")
 	}
+}
+
+func TestSessionPool_WatcherFanOut(t *testing.T) {
+	c := cache.New(nil)
+	p := newSessionPool(c, time.Minute)
+	defer p.shutdown()
+
+	key := poolKey{root: "/project"}
+	session := cache.NewSession(t.Context(), c)
+	_, entry := p.register(key, session)
+	defer p.release(key)
+
+	var (
+		mu  sync.Mutex
+		got [][]file.Modification
+	)
+	cb := func(_ context.Context, mods []file.Modification, _ map[*cache.View][]protocol.DocumentURI) {
+		mu.Lock()
+		got = append(got, mods)
+		mu.Unlock()
+	}
+
+	sub := entry.Subscribe(cb)
+
+	mods := []file.Modification{{URI: "file:///x.go", Action: file.Change, OnDisk: true}}
+	entry.fanOutWatcherEvents(t.Context(), mods, nil)
+
+	mu.Lock()
+	if len(got) != 1 || len(got[0]) != 1 || got[0][0].URI != "file:///x.go" {
+		t.Fatalf("subscriber not invoked once with the modification: got=%v", got)
+	}
+	mu.Unlock()
+
+	sub.Close()
+
+	// After Close, fanOut is a no-op for this subscriber.
+	entry.fanOutWatcherEvents(t.Context(), mods, nil)
+	mu.Lock()
+	if len(got) != 1 {
+		t.Fatalf("subscriber invoked after Close: got=%v", got)
+	}
+	mu.Unlock()
 }
 
 func TestSessionPool_Shutdown(t *testing.T) {
