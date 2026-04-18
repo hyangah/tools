@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -384,6 +385,89 @@ func Foo() int {
 				res.checkStdout(`a\.go:`)
 				res.checkStdout(`undefined`)
 			}
+		})
+	}
+}
+
+// TestCLIFormat exercises `gopls cli format`. It verifies both the
+// default (print reformatted content) and the -l (list changed files)
+// modes, using a source file with deliberate bad formatting. Also
+// verifies end-to-end that the edit-producing server path works with
+// the CLI profile's skipDidOpen=true: if the Formatting handler needed
+// an overlay, this test would fail.
+func TestCLIFormat(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- bad.go --
+package a
+
+func Bad( ) {
+var x int
+_=x
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			// Default: print reformatted content.
+			{
+				res := runCLI(t, tree, mode, "format", "./bad.go")
+				res.checkExit(true)
+				if res.stdout == "" {
+					t.Fatalf("format produced empty stdout in mode %s; stderr=%s",
+						mode.name, res.stderr)
+				}
+				res.checkStdout(`func Bad\(\) \{`)
+				res.checkStdout(`_ = x`)
+			}
+			// -l: list changed files.
+			{
+				res := runCLI(t, tree, mode, "format", "-l", "./bad.go")
+				res.checkExit(true)
+				res.checkStdout(`bad\.go`)
+			}
+		})
+	}
+}
+
+// TestCLIImports exercises `gopls cli imports`, verifying that an
+// unused import is removed. Goes through textDocument/codeAction with
+// Only=SourceOrganizeImports.
+func TestCLIImports(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+import (
+	"fmt"
+	"strings"
+)
+
+func F() {
+	fmt.Println("hi")
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "imports", "./a.go")
+			res.checkExit(true)
+			if res.stdout == "" {
+				t.Fatalf("imports produced empty stdout in mode %s; stderr=%s",
+					mode.name, res.stderr)
+			}
+			// The unused "strings" import must be removed.
+			if strings.Contains(res.stdout, `"strings"`) {
+				t.Errorf("unused import not removed; stdout=%q", res.stdout)
+			}
+			res.checkStdout(`"fmt"`)
 		})
 	}
 }
