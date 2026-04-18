@@ -38,6 +38,46 @@ import (
 	"golang.org/x/tools/internal/tool"
 )
 
+// clientProfile describes per-connection LSP client behavior that
+// app.connect and initParams consult when initializing a new session.
+// A zero value (or nil pointer to it) means "IDE-like defaults": the
+// legacy behavior before capability profiles were introduced. The
+// `gopls cli` command passes a non-default profile to declare that the
+// client does not render push diagnostics and does not need work-done
+// progress. See proposal §3.1, §4.
+type clientProfile struct {
+	// wantsPushDiagnostics advertises to the server (via
+	// initializationOptions) whether this client wants server-initiated
+	// publishDiagnostics. CLI clients set this false to opt out of the
+	// pool-scoped push subscriber count, which lets a pooled daemon skip
+	// the modification-triggered diagnose pass when no attached
+	// connection wants push.
+	wantsPushDiagnostics bool
+
+	// workDoneProgress advertises window.workDoneProgress support. CLI
+	// clients set this false; progress notifications over a short-lived
+	// connection are noise.
+	workDoneProgress bool
+}
+
+// defaultClientProfile is the capability profile used by legacy
+// subcommands (definition, references, check, …) and anything that does
+// not explicitly opt into a different profile. It matches pre-Stage-4
+// behavior.
+var defaultClientProfile = clientProfile{
+	wantsPushDiagnostics: true,
+	workDoneProgress:     true,
+}
+
+// cliClientProfile is the capability profile used by `gopls cli`
+// subcommands. It declares no push diagnostics and no progress.
+// Per-subcommand refinements (e.g., advertising textDocument.diagnostic
+// for check/codeaction) will be layered on top in a later stage.
+var cliClientProfile = clientProfile{
+	wantsPushDiagnostics: false,
+	workDoneProgress:     false,
+}
+
 // Application is the main application as passed to tool.Main
 // It handles the main command line parsing and dispatch to the sub commands.
 type Application struct {
@@ -53,6 +93,11 @@ type Application struct {
 
 	// the options configuring function to invoke when building a server
 	options func(*settings.Options)
+
+	// profile, if non-nil, overrides defaultClientProfile during
+	// (*Application).connect. cliCmd sets this before connecting so the
+	// gopls cli subcommand family runs with the CLI capability profile.
+	profile *clientProfile
 
 	// Support for remote LSP server.
 	Remote string `flag:"remote" help:"forward all commands to a remote lsp specified by this flag. With no special prefix, this is assumed to be a TCP address. If prefixed by 'unix;', the subsequent address is assumed to be a unix domain socket. If 'auto', or prefixed by 'auto;', the remote address is automatically resolved based on the executing environment."`
@@ -316,6 +361,10 @@ func (app *Application) connect(ctx context.Context) (*client, *cache.Session, e
 	if err != nil {
 		return nil, nil, fmt.Errorf("finding workdir: %v", err)
 	}
+	profile := defaultClientProfile
+	if app.profile != nil {
+		profile = *app.profile
+	}
 	options := settings.DefaultOptions(app.options)
 	client := newClient(app)
 	var (
@@ -341,7 +390,7 @@ func (app *Application) connect(ctx context.Context) (*client, *cache.Session, e
 			protocol.Handlers(
 				protocol.ClientHandler(client, jsonrpc2.MethodNotFound)))
 	}
-	if err := client.initialize(ctx, svr, initParams(root, options)); err != nil {
+	if err := client.initialize(ctx, svr, initParams(root, options, profile)); err != nil {
 		return nil, nil, err
 	}
 	return client, sess, nil
@@ -360,7 +409,7 @@ func daemonArgs(network, address string) []string {
 	}
 }
 
-func initParams(rootDir string, opts *settings.Options) *protocol.ParamInitialize {
+func initParams(rootDir string, opts *settings.Options, profile clientProfile) *protocol.ParamInitialize {
 	params := &protocol.ParamInitialize{}
 	params.RootURI = protocol.URIFromPath(rootDir)
 	params.Capabilities.Workspace.Configuration = true
@@ -385,12 +434,13 @@ func initParams(rootDir string, opts *settings.Options) *protocol.ParamInitializ
 			},
 		},
 	}
-	params.Capabilities.Window.WorkDoneProgress = true
+	params.Capabilities.Window.WorkDoneProgress = profile.workDoneProgress
 	params.Capabilities.Workspace.FileOperations = &protocol.FileOperationClientCapabilities{
 		DidCreate: true,
 	}
 	params.InitializationOptions = map[string]any{
-		"symbolMatcher": string(opts.SymbolMatcher),
+		"symbolMatcher":        string(opts.SymbolMatcher),
+		"wantsPushDiagnostics": profile.wantsPushDiagnostics,
 	}
 	return params
 }

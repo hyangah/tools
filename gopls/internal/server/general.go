@@ -72,6 +72,13 @@ func (s *server) Initialize(ctx context.Context, params *protocol.ParamInitializ
 	}
 	options.ForClientCapabilities(params.ClientInfo, params.Capabilities)
 
+	// Record the per-connection push-diagnostic preference from the
+	// resolved options. The subscribe gate in addFolders consults this
+	// field; setting it before addFolders runs ensures a CLI profile
+	// declaring WantsPushDiagnostics=false opts out of the pool
+	// subscription cleanly. See proposal §3.1, §4.
+	s.wantsPushDiagnostics = options.WantsPushDiagnostics
+
 	if options.MaxFileCacheBytes > 0 {
 		filecache.SetBudget(options.MaxFileCacheBytes)
 	}

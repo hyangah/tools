@@ -58,6 +58,11 @@ func (c *cliCmd) Run(ctx context.Context, args ...string) error {
 		return tool.CommandLineErrorf("usage: gopls cli <command> [args]")
 	}
 
+	// Opt into the CLI capability profile: no push diagnostics, no
+	// progress. Must be set before connect — the profile is consumed in
+	// initParams during the Initialize handshake.
+	c.app.profile = &cliClientProfile
+
 	conn, _, err := c.app.connect(ctx)
 	if err != nil {
 		return err
