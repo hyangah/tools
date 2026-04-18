@@ -68,6 +68,15 @@ type clientProfile struct {
 	// priming. See proposal §4 and the 2026-04-18 investigation note in
 	// gopls/CLAUDE.md.
 	skipDidOpen bool
+
+	// wantsPullDiagnostics advertises textDocument/diagnostic and
+	// workspace/diagnostic pull support (LSP 3.17). When true, initParams
+	// advertises the matching client capabilities and sets
+	// settings.Options.PullDiagnostics via initializationOptions so the
+	// server advertises diagnosticProvider in return. Used by the
+	// diagnostic-consuming `gopls cli` subcommands (check, vet, codeaction,
+	// fix). See proposal §2.
+	wantsPullDiagnostics bool
 }
 
 // defaultClientProfile is the capability profile used by legacy
@@ -80,15 +89,39 @@ var defaultClientProfile = clientProfile{
 	skipDidOpen:          false,
 }
 
-// cliClientProfile is the capability profile used by `gopls cli`
-// subcommands. It declares no push diagnostics, no progress, and skips
-// DidOpen. Per-subcommand refinements (e.g., advertising
-// textDocument.diagnostic for check/codeaction) will be layered on top
-// in a later stage.
+// cliClientProfile is the base capability profile for `gopls cli`
+// subcommands that do not consume diagnostics (def, refs, hover, impl,
+// symbols, wsymbols, rename). It declares no push diagnostics, no
+// progress, and skips DidOpen.
 var cliClientProfile = clientProfile{
 	wantsPushDiagnostics: false,
 	workDoneProgress:     false,
 	skipDidOpen:          true,
+}
+
+// cliPullProfile is the capability profile for `gopls cli` subcommands
+// that consume diagnostics (check, vet, codeaction, fix). Identical to
+// cliClientProfile but advertises pull-diagnostic support so the server
+// exposes the workspace/diagnostic and textDocument/diagnostic handlers.
+var cliPullProfile = clientProfile{
+	wantsPushDiagnostics: false,
+	workDoneProgress:     false,
+	skipDidOpen:          true,
+	wantsPullDiagnostics: true,
+}
+
+// cliProfileFor picks the capability profile for a `gopls cli`
+// subcommand. Called from cliCmd.Run before (*Application).connect so
+// per-subcommand capabilities are advertised in the Initialize
+// handshake. Unknown subcommands fall back to the base CLI profile; the
+// subcommand dispatcher in goplscli/cmd will reject them after connect.
+func cliProfileFor(sub string) clientProfile {
+	switch sub {
+	case "check", "vet", "codeaction", "fix":
+		return cliPullProfile
+	default:
+		return cliClientProfile
+	}
 }
 
 // Application is the main application as passed to tool.Main
@@ -451,10 +484,16 @@ func initParams(rootDir string, opts *settings.Options, profile clientProfile) *
 	params.Capabilities.Workspace.FileOperations = &protocol.FileOperationClientCapabilities{
 		DidCreate: true,
 	}
-	params.InitializationOptions = map[string]any{
+	initOpts := map[string]any{
 		"symbolMatcher":        string(opts.SymbolMatcher),
 		"wantsPushDiagnostics": profile.wantsPushDiagnostics,
 	}
+	if profile.wantsPullDiagnostics {
+		params.Capabilities.TextDocument.Diagnostic = &protocol.DiagnosticClientCapabilities{}
+		params.Capabilities.Workspace.Diagnostics = &protocol.DiagnosticWorkspaceClientCapabilities{}
+		initOpts["pullDiagnostics"] = true
+	}
+	params.InitializationOptions = initOpts
 	return params
 }
 

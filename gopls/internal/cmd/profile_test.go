@@ -23,9 +23,11 @@ func TestInitParamsProfile(t *testing.T) {
 		profile           clientProfile
 		wantWorkDone      bool
 		wantWantsPushDiag bool
+		wantPullDiag      bool
 	}{
-		{"default", defaultClientProfile, true, true},
-		{"cli", cliClientProfile, false, false},
+		{"default", defaultClientProfile, true, true, false},
+		{"cli", cliClientProfile, false, false, false},
+		{"cli-pull", cliPullProfile, false, false, true},
 	}
 
 	for _, tc := range tests {
@@ -45,7 +47,37 @@ func TestInitParamsProfile(t *testing.T) {
 			if got != tc.wantWantsPushDiag {
 				t.Errorf("wantsPushDiagnostics = %v, want %v", got, tc.wantWantsPushDiag)
 			}
+			gotPull, _ := m["pullDiagnostics"].(bool)
+			if gotPull != tc.wantPullDiag {
+				t.Errorf("pullDiagnostics = %v, want %v", gotPull, tc.wantPullDiag)
+			}
+			hasTDDiag := p.Capabilities.TextDocument.Diagnostic != nil
+			hasWSDiag := p.Capabilities.Workspace.Diagnostics != nil
+			if hasTDDiag != tc.wantPullDiag {
+				t.Errorf("TextDocument.Diagnostic set = %v, want %v", hasTDDiag, tc.wantPullDiag)
+			}
+			if hasWSDiag != tc.wantPullDiag {
+				t.Errorf("Workspace.Diagnostics set = %v, want %v", hasWSDiag, tc.wantPullDiag)
+			}
 		})
+	}
+}
+
+// TestCLIProfileFor pins the per-subcommand profile routing. The
+// diagnostic-consuming subcommands (check, vet, codeaction, fix) get
+// cliPullProfile; everything else gets the base cliClientProfile.
+func TestCLIProfileFor(t *testing.T) {
+	pullSubs := []string{"check", "vet", "codeaction", "fix"}
+	baseSubs := []string{"def", "refs", "hover", "impl", "symbols", "wsymbols", "rename", "format", "imports", "", "bogus"}
+	for _, sub := range pullSubs {
+		if got := cliProfileFor(sub); !got.wantsPullDiagnostics {
+			t.Errorf("cliProfileFor(%q).wantsPullDiagnostics = false, want true", sub)
+		}
+	}
+	for _, sub := range baseSubs {
+		if got := cliProfileFor(sub); got.wantsPullDiagnostics {
+			t.Errorf("cliProfileFor(%q).wantsPullDiagnostics = true, want false", sub)
+		}
 	}
 }
 

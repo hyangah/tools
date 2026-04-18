@@ -339,3 +339,51 @@ func caller() {
 		})
 	}
 }
+
+// TestCLICheck exercises `gopls cli check` in both workspace-pull form
+// (no args, calls workspace/diagnostic) and per-file pull form (args,
+// calls textDocument/diagnostic). Pins the Stage 5a pull-diagnostic
+// plumbing end-to-end: if wantsPullDiagnostics doesn't thread through,
+// the server won't advertise diagnosticProvider and this will fail.
+func TestCLICheck(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+func Foo() int {
+	var x int
+	return x + undefined
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			// Workspace pull.
+			{
+				res := runCLI(t, tree, mode, "check")
+				res.checkExit(true)
+				if res.stdout == "" {
+					t.Fatalf("check (workspace) produced empty stdout in mode %s; stderr=%s",
+						mode.name, res.stderr)
+				}
+				res.checkStdout(`a\.go:`)
+				res.checkStdout(`undefined`)
+			}
+			// Per-file pull.
+			{
+				res := runCLI(t, tree, mode, "check", "./a.go")
+				res.checkExit(true)
+				if res.stdout == "" {
+					t.Fatalf("check (per-file) produced empty stdout in mode %s; stderr=%s",
+						mode.name, res.stderr)
+				}
+				res.checkStdout(`a\.go:`)
+				res.checkStdout(`undefined`)
+			}
+		})
+	}
+}
