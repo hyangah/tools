@@ -142,10 +142,6 @@ func (s *cliServer) DocumentSymbol(ctx context.Context, params *protocol.Documen
 	return s.Server.DocumentSymbol(ctx, params)
 }
 
-func (s *cliServer) Symbol(ctx context.Context, params *protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
-	return s.Server.Symbol(ctx, params)
-}
-
 func (s *cliServer) Rename(ctx context.Context, params *protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
 	if _, err := s.client.openFile(ctx, params.TextDocument.URI); err != nil {
 		return nil, err
