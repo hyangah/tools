@@ -58,10 +58,11 @@ func (c *cliCmd) Run(ctx context.Context, args ...string) error {
 		return tool.CommandLineErrorf("usage: gopls cli <command> [args]")
 	}
 
-	// Opt into the CLI capability profile: no push diagnostics, no
-	// progress. Must be set before connect — the profile is consumed in
-	// initParams during the Initialize handshake.
-	c.app.profile = &cliClientProfile
+	// Opt into the CLI capability profile. Must be set before connect —
+	// the profile is consumed in initParams during the Initialize
+	// handshake, and in the cliServer wrapping decision below.
+	profile := cliClientProfile
+	c.app.profile = &profile
 
 	conn, _, err := c.app.connect(ctx)
 	if err != nil {
@@ -69,19 +70,27 @@ func (c *cliCmd) Run(ctx context.Context, args ...string) error {
 	}
 	defer conn.terminate(ctx)
 
-	// The CLI wraps the conn.server and conn (for openFile) into a
-	// cliServer that handles file opening before queries.
-	cs := &cliServer{client: conn, Server: conn.server}
-	exitCode := cli.Run(ctx, cs, c.JSON, args, os.Stdout)
+	// When the profile calls for it, skip the cliServer wrapper that
+	// sends DidOpen before every query. The server reads target URIs
+	// from disk, and in a pooled daemon the session-scoped file watcher
+	// keeps snapshots current across connections. See the 2026-04-18
+	// investigation note in gopls/CLAUDE.md.
+	var srv protocol.Server = conn.server
+	if !profile.skipDidOpen {
+		srv = &cliServer{client: conn, Server: conn.server}
+	}
+	exitCode := cli.Run(ctx, srv, c.JSON, args, os.Stdout)
 	if exitCode != 0 {
 		return fmt.Errorf("exit code %d", exitCode)
 	}
 	return nil
 }
 
-// cliServer wraps protocol.Server to open files before queries.
-// The in-process gopls server requires didOpen before it can serve
-// queries on a file (no file watchers in CLI mode).
+// cliServer wraps protocol.Server to open files before queries, for
+// profiles that do not declare skipDidOpen. Kept as a legacy fallback
+// while we validate the skip-DidOpen path; can be removed once the CLI
+// profile is the only consumer and its skipDidOpen is known-good in
+// production.
 type cliServer struct {
 	client          *client
 	protocol.Server // delegates all methods; overridden selectively below

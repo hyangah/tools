@@ -48,3 +48,18 @@ func TestInitParamsProfile(t *testing.T) {
 		})
 	}
 }
+
+// TestCLIProfileSkipsDidOpen pins the CLI profile's client-side choice
+// to skip DidOpen priming. The cliServer wrapper (cmd/cli.go) consults
+// this bit to decide whether to open files before each query. Changing
+// this default is a user-visible behavior change — prior sessions have
+// toggled it back and forth — so a cheap pin guards against accidental
+// flips.
+func TestCLIProfileSkipsDidOpen(t *testing.T) {
+	if !cliClientProfile.skipDidOpen {
+		t.Error("cliClientProfile.skipDidOpen = false, want true (Stage 4b)")
+	}
+	if defaultClientProfile.skipDidOpen {
+		t.Error("defaultClientProfile.skipDidOpen = true, want false")
+	}
+}
