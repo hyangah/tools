@@ -472,6 +472,77 @@ func F() {
 	}
 }
 
+// TestCLICodeAction exercises `gopls cli codeaction` listing code
+// actions at a file position. Uses a known quickfix-producing
+// situation (unused variable) so the list is non-empty.
+func TestCLICodeAction(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+func F() {
+	x := 1
+	_ = x
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			// Position at func F opening brace — gopls commonly surfaces
+			// refactor actions there.
+			res := runCLI(t, tree, mode, "codeaction", "./a.go:3:6")
+			res.checkExit(true)
+			if res.stdout == "" {
+				t.Fatalf("codeaction produced empty stdout in mode %s; stderr=%s",
+					mode.name, res.stderr)
+			}
+		})
+	}
+}
+
+// TestCLIFix exercises `gopls cli fix` applying the SourceOrganizeImports
+// code action via --kind. Chosen for test stability: organize-imports is
+// deterministic, always present on a file with imports, and inline (no
+// resolve needed in gopls today).
+func TestCLIFix(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+import (
+	"fmt"
+	"strings"
+)
+
+func F() {
+	fmt.Println("hi")
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "fix", "./a.go:1:1", "--kind", "source.organizeImports")
+			res.checkExit(true)
+			if res.stdout == "" {
+				t.Fatalf("fix produced empty stdout in mode %s; stderr=%s",
+					mode.name, res.stderr)
+			}
+			if strings.Contains(res.stdout, `"strings"`) {
+				t.Errorf("unused import not removed; stdout=%q", res.stdout)
+			}
+			res.checkStdout(`"fmt"`)
+		})
+	}
+}
+
 // TestCLIVet exercises `gopls cli vet`, verifying that the Source
 // filter keeps vet-suite findings (printf) and drops non-vet ones
 // (type-check errors from the compiler).
