@@ -387,3 +387,38 @@ func Foo() int {
 		})
 	}
 }
+
+// TestCLIVet exercises `gopls cli vet`, verifying that the Source
+// filter keeps vet-suite findings (printf) and drops non-vet ones
+// (type-check errors from the compiler).
+func TestCLIVet(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+import "fmt"
+
+func Bad() {
+	fmt.Printf("%d", "not a number")
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "vet", "./a.go")
+			res.checkExit(true)
+			if res.stdout == "" {
+				t.Fatalf("vet produced empty stdout in mode %s; stderr=%s",
+					mode.name, res.stderr)
+			}
+			// printf analyzer catches the format/arg mismatch and is in
+			// the vet suite, so it must appear.
+			res.checkStdout(`a\.go:`)
+			res.checkStdout(`printf`)
+		})
+	}
+}

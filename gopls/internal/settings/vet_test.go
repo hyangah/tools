@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"golang.org/x/tools/gopls/internal/doc"
+	"golang.org/x/tools/gopls/internal/settings"
 	"golang.org/x/tools/internal/testenv"
 )
 
@@ -41,10 +42,27 @@ func TestVetSuite(t *testing.T) {
 	out := fmt.Sprint(cmd.Stdout)
 	_, out, _ = strings.Cut(out, "Registered analyzers:\n\n")
 	out, _, _ = strings.Cut(out, "\n\n")
+	vetNames := make(map[string]bool)
 	for line := range strings.SplitSeq(out, "\n") {
 		name := strings.Fields(line)[0]
 		if !goplsAnalyzers[name] {
 			t.Errorf("gopls lacks vet analyzer %q", name)
+		}
+		vetNames[name] = true
+	}
+
+	// The inVet classification drives `gopls cli vet`'s filter. If a
+	// cmd/vet analyzer isn't marked inVet in settings.DefaultAnalyzers,
+	// `gopls cli vet` silently hides its findings.
+	got := settings.VetAnalyzerNames()
+	for name := range vetNames {
+		if !got[name] {
+			t.Errorf("analyzer %q is in cmd/vet but not marked inVet in settings.DefaultAnalyzers", name)
+		}
+	}
+	for name := range got {
+		if !vetNames[name] {
+			t.Errorf("analyzer %q is marked inVet but not in cmd/vet (may indicate a stale classification)", name)
 		}
 	}
 }
