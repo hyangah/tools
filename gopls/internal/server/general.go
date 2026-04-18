@@ -427,9 +427,8 @@ func (s *server) addFolders(ctx context.Context, folders []protocol.WorkspaceFol
 	// be invoked multiple times (DidChangeWorkspaceFolders, implicit
 	// folder creation on unknown-URI DidOpen); the poolSubscription==nil
 	// guard prevents leaking subscriptions. Only subscribe when this
-	// connection wants push diagnostics — a CLI profile (Stage 4) can
-	// opt out by flipping wantsPushDiagnostics false. See proposal §3.1,
-	// §3.3a.
+	// connection wants push diagnostics; the CLI profile opts out by
+	// declaring wantsPushDiagnostics=false. See proposal §3.1, §3.3a.
 	if s.poolEntry != nil && s.poolSubscription == nil && s.wantsPushDiagnostics {
 		s.poolSubscription = s.poolEntry.Subscribe(s.onPoolWatcherEvents)
 	}

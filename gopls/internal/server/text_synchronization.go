@@ -327,11 +327,9 @@ func (s *server) didModifyFiles(ctx context.Context, modifications []file.Modifi
 	}
 
 	// Compute gate: skip the workspace diagnostic pass when no attached
-	// connection wants push-model publishDiagnostics (and, once Stage 3d
-	// lands, no pull is pending). This replaces the provisional poolHit
-	// bypass: pool-hit is no longer a sufficient reason to skip compute,
-	// because an IDE attached to a pool-hit session still needs
-	// publishDiagnostics. See proposal §3.1.
+	// connection wants push-model publishDiagnostics. Pull handlers
+	// (Stage 3d) drive compute inline on demand instead. See proposal
+	// §3.1.
 	if s.shouldComputeDiagnostics() {
 		modCtx, modID := s.needsDiagnosis(ctx, viewsToDiagnose)
 		wg.Go(func() {
