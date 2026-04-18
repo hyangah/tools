@@ -159,6 +159,58 @@ func TestDiagnosticClearingOnEdit(t *testing.T) {
 	})
 }
 
+// TestWorkspacePullDiagnostics exercises Stage 3e: workspace/diagnostic
+// returns reports for every Go file in the workspace, including ones the
+// editor has never opened. This is the request `cli check ./...` will use
+// to avoid N round-trips of per-file pull.
+func TestWorkspacePullDiagnostics(t *testing.T) {
+	const ws = `
+-- go.mod --
+module mod.com
+
+go 1.12
+-- a.go --
+package consts
+
+const A = 1
+-- b.go --
+package consts
+
+const A = 2
+-- clean.go --
+package consts
+
+const C = 3
+`
+	WithOptions(
+		Settings{
+			"pullDiagnostics": true,
+		},
+	).Run(t, ws, func(t *testing.T, env *Env) {
+		// Workspace pull does not require the file to be opened in the
+		// editor — that's the point relative to per-file pull.
+		got := env.WorkspaceDiagnostics()
+
+		// a.go and b.go each carry the redeclaration error; clean.go has none.
+		aURI := env.Sandbox.Workdir.URI("a.go")
+		bURI := env.Sandbox.Workdir.URI("b.go")
+		cleanURI := env.Sandbox.Workdir.URI("clean.go")
+
+		if n := len(got[aURI]); n != 1 {
+			t.Errorf("workspace diagnostics for a.go: got %d, want 1; report=%v", n, got[aURI])
+		}
+		if n := len(got[bURI]); n != 1 {
+			t.Errorf("workspace diagnostics for b.go: got %d, want 1; report=%v", n, got[bURI])
+		}
+		if _, ok := got[cleanURI]; !ok {
+			t.Errorf("workspace diagnostics missing report for clean.go")
+		}
+		if n := len(got[cleanURI]); n != 0 {
+			t.Errorf("workspace diagnostics for clean.go: got %d, want 0; report=%v", n, got[cleanURI])
+		}
+	})
+}
+
 func TestDiagnosticClearingOnDelete_Issue37049(t *testing.T) {
 	Run(t, badPackage, func(t *testing.T, env *Env) {
 		env.OpenFile("a.go")
