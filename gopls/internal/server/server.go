@@ -27,6 +27,7 @@ import (
 
 	"golang.org/x/tools/gopls/internal/cache"
 	"golang.org/x/tools/gopls/internal/cache/metadata"
+	"golang.org/x/tools/gopls/internal/file"
 	"golang.org/x/tools/gopls/internal/filewatcher"
 	"golang.org/x/tools/gopls/internal/golang"
 	"golang.org/x/tools/gopls/internal/golang/splitpkg"
@@ -56,6 +57,13 @@ type SessionSwapHook func(ctx context.Context, folders []protocol.WorkspaceFolde
 // (another connection registered first) both are nil.
 type PostInitHook func(ctx context.Context, session *cache.Session, folders []protocol.WorkspaceFolder) (entry PoolEntry, releaseFunc func())
 
+// Subscription is the handle returned by PoolEntry.Subscribe. Closing it
+// unregisters the callback and decrements the pool's push-subscriber count.
+// Close must be called exactly once.
+type Subscription interface {
+	Close()
+}
+
 // PoolEntry is the handle a *server uses to reach shared, pool-scoped
 // resources that outlive any single connection. It is populated from the
 // SessionSwapHook or PostInitHook returns when session pooling is enabled.
@@ -68,11 +76,11 @@ type PoolEntry interface {
 	// mode is sticky for the entry's lifetime; later attachers requesting
 	// a different mode get a warning but keep the existing watcher.
 	//
-	// The onChange and onError callbacks are captured only on creation
-	// (first call); callers pass them every time for convenience, but
-	// subsequent calls ignore them. Callbacks must not reference any
-	// particular *server since they outlive individual connections.
-	EnsureWatcher(ctx context.Context, mode settings.FileWatcherMode, onChange func([]protocol.FileEvent), onError func(error)) error
+	// The pool owns the onChange handler internally: it invalidates the
+	// shared session (so disk edits are visible across connections, even
+	// when no *server is attached) and then fans events out to subscribers
+	// installed via Subscribe.
+	EnsureWatcher(ctx context.Context, mode settings.FileWatcherMode, onError func(error)) error
 
 	// WatchDir adds dir to the pool watcher's watched set. Idempotent
 	// across connections: the pool entry de-duplicates directories, which
@@ -84,17 +92,17 @@ type PoolEntry interface {
 	Poke()
 
 	// Subscribe registers this connection as a push-diagnostic subscriber
-	// on the pool entry. Callers must pair it with exactly one Unsubscribe
-	// on connection shutdown. See proposal §3.1.
-	Subscribe()
-
-	// Unsubscribe decrements the subscriber count previously added by
-	// Subscribe. Must be called exactly once per Subscribe.
-	Unsubscribe()
+	// on the pool entry. The returned Subscription must be Closed exactly
+	// once on connection shutdown. While subscribed, onWatcherEvents is
+	// invoked from the pool's file watcher whenever it fires for this
+	// pool entry, after the session-level invalidation has run; the
+	// callback receives the watcher's session-owned background context,
+	// the modifications, and the per-View diagnose set returned by
+	// session.DidModifyFiles. See proposal §3.1, §3.3a.
+	Subscribe(onWatcherEvents func(ctx context.Context, modifications []file.Modification, viewsToDiagnose map[*cache.View][]protocol.DocumentURI)) Subscription
 
 	// HasPushSubscribers reports whether any attached connection wants
-	// push-model publishDiagnostics. Stage 3c's compute gate and Stage 3c′'s
-	// fan-out both read this.
+	// push-model publishDiagnostics. Stage 3c's compute gate reads this.
 	HasPushSubscribers() bool
 
 	// DiagnosticCache returns the pool-shared cache of computed diagnostic
@@ -196,10 +204,12 @@ type server struct {
 	// pooled session. Populated via sessionSwapHook / postInitHook.
 	poolEntry PoolEntry
 
-	// poolSubscribed is true once this server has called
-	// poolEntry.Subscribe. Used so Shutdown calls Unsubscribe exactly
-	// once per Subscribe, regardless of how often Shutdown fires.
-	poolSubscribed bool
+	// poolSubscription, if non-nil, holds the push-diagnostic
+	// subscription returned by poolEntry.Subscribe. Used so Shutdown
+	// closes it exactly once per Subscribe, regardless of how often
+	// Shutdown fires (Subscribe is also single-fired by addFolders'
+	// poolSubscription==nil guard).
+	poolSubscription Subscription
 
 	// wantsPushDiagnostics records whether this connection wants
 	// server-initiated publishDiagnostics notifications. When false,

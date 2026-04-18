@@ -180,7 +180,7 @@ func (s *server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 
 	var modifications []file.Modification
 	for _, change := range params.Changes {
-		action := changeTypeToFileAction(change.Type)
+		action := ChangeTypeToFileAction(change.Type)
 		modifications = append(modifications, file.Modification{
 			URI:    change.URI,
 			Action: action,
@@ -238,6 +238,33 @@ func (s *server) shouldComputeDiagnostics() bool {
 		return true
 	}
 	return s.poolEntry.HasPushSubscribers()
+}
+
+// onPoolWatcherEvents is the callback the pool entry invokes from the
+// shared file watcher after session.DidModifyFiles has invalidated the
+// session-level snapshot for the disk events. It performs the *server-side
+// half (Stage 1's accepted regression): mark URIs as needing republish,
+// then kick a per-server diagnose+publish goroutine if the connection is
+// still subscribed to push diagnostics. Compute results land in the
+// pool-shared DiagnosticCache, so concurrent fan-outs to N IDE
+// subscribers cooperate naturally — only the first triggers analysis,
+// the rest publish from cache. See proposal §3.3a.
+//
+// ctx is the watcher's session-owned background context (created in
+// updateServerSideWatcher and detached from the addFolders request); the
+// diagnose pass runs in a goroutine so a slow analysis does not block the
+// watcher's serial fan-out loop.
+func (s *server) onPoolWatcherEvents(ctx context.Context, modifications []file.Modification, viewsToDiagnose map[*cache.View][]protocol.DocumentURI) {
+	for _, mod := range modifications {
+		s.mustPublishDiagnostics(mod.URI)
+	}
+
+	if !s.shouldComputeDiagnostics() {
+		return
+	}
+
+	modCtx, modID := s.needsDiagnosis(ctx, viewsToDiagnose)
+	go s.diagnoseChangedViews(modCtx, modID, viewsToDiagnose, FromDidChangeWatchedFiles)
 }
 
 func (s *server) didModifyFiles(ctx context.Context, modifications []file.Modification, cause ModificationSource) error {
@@ -483,7 +510,9 @@ func (s *server) checkEfficacy(uri protocol.DocumentURI, version int32, change p
 	complUnused.Inc()
 }
 
-func changeTypeToFileAction(ct protocol.FileChangeType) file.Action {
+// ChangeTypeToFileAction translates an LSP FileChangeType into the
+// internal file.Action enum used by file.Modification.
+func ChangeTypeToFileAction(ct protocol.FileChangeType) file.Action {
 	switch ct {
 	case protocol.Changed:
 		return file.Change
