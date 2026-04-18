@@ -83,6 +83,7 @@ type Analyzer struct {
 	analyzer    *analysis.Analyzer
 	staticcheck *lint.RawDocumentation // only for staticcheck analyzers
 	nonDefault  bool                   // (sense is negated so we can mostly omit it)
+	inVet       bool                   // member of the traditional cmd/vet suite
 	actionKinds []protocol.CodeActionKind
 	severity    protocol.DiagnosticSeverity
 	tags        []protocol.DiagnosticTag
@@ -154,8 +155,27 @@ func (a *Analyzer) Severity() protocol.DiagnosticSeverity {
 // reported by this analyzer.
 func (a *Analyzer) Tags() []protocol.DiagnosticTag { return a.tags }
 
+// InVet reports whether this analyzer is part of the traditional cmd/vet
+// suite. Used by `gopls cli vet` to filter diagnostics by source.
+// Kept in sync with cmd/vet by TestVetSuite.
+func (a *Analyzer) InVet() bool { return a.inVet }
+
 // String returns the name of this analyzer.
 func (a *Analyzer) String() string { return a.analyzer.String() }
+
+// VetAnalyzerNames returns the set of analyzer names in gopls's
+// traditional vet suite. Diagnostic.Source equals analyzer.Name for
+// analyzer-produced diagnostics, so this set is what `gopls cli vet`
+// filters against.
+func VetAnalyzerNames() map[string]bool {
+	names := make(map[string]bool)
+	for _, a := range DefaultAnalyzers {
+		if a.inVet {
+			names[a.analyzer.Name] = true
+		}
+	}
+	return names
+}
 
 // DefaultAnalyzers holds the list of Analyzers available to all gopls
 // sessions, independent of build version. It is the source from which
@@ -164,44 +184,44 @@ var DefaultAnalyzers = []*Analyzer{
 	// See [Analyzer.Severity] for guidance on setting analyzer severity below.
 
 	// The traditional vet suite:
-	{analyzer: appends.Analyzer},
-	{analyzer: asmdecl.Analyzer},
-	{analyzer: assign.Analyzer},
-	{analyzer: atomic.Analyzer},
-	{analyzer: bools.Analyzer},
-	{analyzer: buildtag.Analyzer},
-	{analyzer: cgocall.Analyzer},
-	{analyzer: composite.Analyzer},
-	{analyzer: copylock.Analyzer},
-	{analyzer: defers.Analyzer},
+	{analyzer: appends.Analyzer, inVet: true},
+	{analyzer: asmdecl.Analyzer, inVet: true},
+	{analyzer: assign.Analyzer, inVet: true},
+	{analyzer: atomic.Analyzer, inVet: true},
+	{analyzer: bools.Analyzer, inVet: true},
+	{analyzer: buildtag.Analyzer, inVet: true},
+	{analyzer: cgocall.Analyzer, inVet: true},
+	{analyzer: composite.Analyzer, inVet: true},
+	{analyzer: copylock.Analyzer, inVet: true},
+	{analyzer: defers.Analyzer, inVet: true},
 	{
 		analyzer: deprecated.Analyzer,
 		severity: protocol.SeverityHint,
 		tags:     []protocol.DiagnosticTag{protocol.Deprecated},
 	},
-	{analyzer: directive.Analyzer},
-	{analyzer: errorsas.Analyzer},
-	{analyzer: framepointer.Analyzer},
-	{analyzer: httpresponse.Analyzer},
-	{analyzer: ifaceassert.Analyzer},
-	{analyzer: loopclosure.Analyzer},
-	{analyzer: lostcancel.Analyzer},
-	{analyzer: nilfunc.Analyzer},
-	{analyzer: printf.Analyzer},
-	{analyzer: shift.Analyzer},
-	{analyzer: sigchanyzer.Analyzer},
-	{analyzer: slog.Analyzer},
-	{analyzer: stdmethods.Analyzer},
-	{analyzer: stdversion.Analyzer},
-	{analyzer: stringintconv.Analyzer},
-	{analyzer: structtag.Analyzer},
-	{analyzer: testinggoroutine.Analyzer},
-	{analyzer: tests.Analyzer},
-	{analyzer: timeformat.Analyzer},
-	{analyzer: unmarshal.Analyzer},
-	{analyzer: unreachable.Analyzer},
-	{analyzer: unsafeptr.Analyzer},
-	{analyzer: unusedresult.Analyzer},
+	{analyzer: directive.Analyzer, inVet: true},
+	{analyzer: errorsas.Analyzer, inVet: true},
+	{analyzer: framepointer.Analyzer, inVet: true},
+	{analyzer: httpresponse.Analyzer, inVet: true},
+	{analyzer: ifaceassert.Analyzer, inVet: true},
+	{analyzer: loopclosure.Analyzer, inVet: true},
+	{analyzer: lostcancel.Analyzer, inVet: true},
+	{analyzer: nilfunc.Analyzer, inVet: true},
+	{analyzer: printf.Analyzer, inVet: true},
+	{analyzer: shift.Analyzer, inVet: true},
+	{analyzer: sigchanyzer.Analyzer, inVet: true},
+	{analyzer: slog.Analyzer, inVet: true},
+	{analyzer: stdmethods.Analyzer, inVet: true},
+	{analyzer: stdversion.Analyzer, inVet: true},
+	{analyzer: stringintconv.Analyzer, inVet: true},
+	{analyzer: structtag.Analyzer, inVet: true},
+	{analyzer: testinggoroutine.Analyzer, inVet: true},
+	{analyzer: tests.Analyzer, inVet: true},
+	{analyzer: timeformat.Analyzer, inVet: true},
+	{analyzer: unmarshal.Analyzer, inVet: true},
+	{analyzer: unreachable.Analyzer, inVet: true},
+	{analyzer: unsafeptr.Analyzer, inVet: true},
+	{analyzer: unusedresult.Analyzer, inVet: true},
 
 	// not suitable for vet:
 	// - some (nilness, yield) use go/ssa; see #59714.
@@ -213,9 +233,9 @@ var DefaultAnalyzers = []*Analyzer{
 	{analyzer: yield.Analyzer},   // uses go/ssa
 	{analyzer: sortslice.Analyzer},
 	{analyzer: embeddirective.Analyzer},
-	{analyzer: waitgroup.Analyzer},     // to appear in cmd/vet@go1.25
-	{analyzer: hostport.Analyzer},      // to appear in cmd/vet@go1.25
-	{analyzer: recursiveiter.Analyzer}, // under evaluation
+	{analyzer: waitgroup.Analyzer, inVet: true}, // in cmd/vet as of go1.25
+	{analyzer: hostport.Analyzer, inVet: true},  // in cmd/vet as of go1.25
+	{analyzer: recursiveiter.Analyzer},          // under evaluation
 	{analyzer: writestring.Analyzer},
 
 	// disabled due to high false positives

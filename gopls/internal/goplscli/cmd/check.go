@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	"golang.org/x/tools/gopls/internal/protocol"
+	"golang.org/x/tools/gopls/internal/settings"
 )
 
 // cliDiagnostic is the flat, printer-friendly shape of a single
@@ -34,6 +35,14 @@ type cliDiagnostic struct {
 // cliProfileFor in internal/cmd/cmd.go).
 func runCheck(ctx context.Context, server protocol.Server, args []string) ([]cliDiagnostic, error) {
 	return runDiagnostics(ctx, server, args, nil)
+}
+
+// runVet implements `gopls cli vet [FILE...]`. Same shape as check, but
+// filters diagnostics to those produced by analyzers in gopls's vet
+// suite (see settings.VetAnalyzerNames). Diagnostic.Source equals the
+// analyzer name, so the set-membership check is exact.
+func runVet(ctx context.Context, server protocol.Server, args []string) ([]cliDiagnostic, error) {
+	return runDiagnostics(ctx, server, args, settings.VetAnalyzerNames())
 }
 
 // runDiagnostics is the shared core used by check and vet. sourceFilter,

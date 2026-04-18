@@ -39,6 +39,7 @@ Commands:
   wsymbols  Search workspace symbols
   rename    Rename a symbol (FILE:LINE:COL --to NEWNAME)
   check     Report diagnostics (workspace, or filtered to FILE...)
+  vet       Report diagnostics from the cmd/vet analyzer suite
 
 Examples:
   $ gopls cli def ./main.go:10:5
