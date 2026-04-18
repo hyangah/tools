@@ -38,6 +38,7 @@ Commands:
   symbols   List symbols in a file
   wsymbols  Search workspace symbols
   rename    Rename a symbol (FILE:LINE:COL --to NEWNAME)
+  check     Report diagnostics (workspace, or filtered to FILE...)
 
 Examples:
   $ gopls cli def ./main.go:10:5
@@ -47,6 +48,8 @@ Examples:
   $ gopls cli symbols ./session.go
   $ gopls cli wsymbols NewSession
   $ gopls cli rename ./session.go:39:6 --to CreateSession
+  $ gopls cli check
+  $ gopls cli check ./main.go
 
 cli-flags:
 `)
@@ -58,10 +61,13 @@ func (c *cliCmd) Run(ctx context.Context, args ...string) error {
 		return tool.CommandLineErrorf("usage: gopls cli <command> [args]")
 	}
 
-	// Opt into the CLI capability profile. Must be set before connect —
-	// the profile is consumed in initParams during the Initialize
-	// handshake, and in the cliServer wrapping decision below.
-	profile := cliClientProfile
+	// Opt into the CLI capability profile for this subcommand. Must be
+	// set before connect — the profile is consumed in initParams during
+	// the Initialize handshake, and in the cliServer wrapping decision
+	// below. Diagnostic-consuming subcommands (check, vet, codeaction,
+	// fix) get pull-diagnostic capabilities layered on top of the base
+	// CLI profile; everything else uses the base profile.
+	profile := cliProfileFor(args[0])
 	c.app.profile = &profile
 
 	conn, _, err := c.app.connect(ctx)

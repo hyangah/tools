@@ -14,6 +14,7 @@ Commands:
   symbols   List symbols in a file
   wsymbols  Search workspace symbols
   rename    Rename a symbol (FILE:LINE:COL --to NEWNAME)
+  check     Report diagnostics (workspace, or filtered to FILE...)
 
 Examples:
   $ gopls cli def ./main.go:10:5
@@ -23,6 +24,8 @@ Examples:
   $ gopls cli symbols ./session.go
   $ gopls cli wsymbols NewSession
   $ gopls cli rename ./session.go:39:6 --to CreateSession
+  $ gopls cli check
+  $ gopls cli check ./main.go
 
 cli-flags:
   -json

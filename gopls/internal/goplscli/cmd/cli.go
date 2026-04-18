@@ -33,7 +33,7 @@ import (
 func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []string, w io.Writer) (exitCode int) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: gopls cli <command> [args]")
-		fmt.Fprintln(os.Stderr, "commands: def, refs, hover, impl, symbols, wsymbols, rename")
+		fmt.Fprintln(os.Stderr, "commands: def, refs, hover, impl, symbols, wsymbols, rename, check")
 		return 2
 	}
 
@@ -57,6 +57,8 @@ func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []st
 		result, err = runWSymbols(ctx, server, subArgs)
 	case "rename":
 		result, err = runRename(ctx, server, subArgs)
+	case "check":
+		result, err = runCheck(ctx, server, subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", sub)
 		return 2
@@ -297,6 +299,8 @@ func printText(w io.Writer, sub string, result any) {
 	case "rename":
 		edit := result.(*protocol.WorkspaceEdit)
 		printRenameEdit(w, edit)
+	case "check":
+		printDiagnostics(w, result.([]cliDiagnostic))
 	}
 }
 
