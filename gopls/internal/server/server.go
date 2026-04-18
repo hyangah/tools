@@ -96,6 +96,13 @@ type PoolEntry interface {
 	// push-model publishDiagnostics. Stage 3c's compute gate and Stage 3c′'s
 	// fan-out both read this.
 	HasPushSubscribers() bool
+
+	// DiagnosticCache returns the pool-shared cache of computed diagnostic
+	// results. The cache is created lazily on first call and reused across
+	// every connection attached to this pool entry, so a push pass on one
+	// connection populates results that a pull on another connection can
+	// read. See proposal §3.1.
+	DiagnosticCache() *DiagnosticCache
 }
 
 // New creates an LSP server and binds it to handle incoming client
@@ -107,6 +114,7 @@ func New(session *cache.Session, client protocol.ClientCloser, options *settings
 	// stub declarations in unimplemented.go.
 	return &server{
 		diagnostics:          make(map[protocol.DocumentURI]*fileDiagnostics),
+		diagStoreLocal:       NewDiagnosticCache(),
 		watchedGlobPatterns:  nil, // empty
 		changedFiles:         make(map[protocol.DocumentURI]unit),
 		session:              session,
@@ -222,8 +230,14 @@ type server struct {
 	fileWatcherMu sync.Mutex
 	fileWatcher   filewatcher.Watcher
 
-	diagnosticsMu sync.Mutex // guards map and its values
+	diagnosticsMu sync.Mutex // guards map and per-server publish bookkeeping in its values
 	diagnostics   map[protocol.DocumentURI]*fileDiagnostics
+
+	// diagStoreLocal is the fallback DiagnosticCache used when this server
+	// has no pool entry (poolEntry == nil). When pooled, the cache lives on
+	// the pool entry instead so multiple connections share compute results.
+	// See diagStore.
+	diagStoreLocal *DiagnosticCache
 
 	// diagnosticsSema limits the concurrency of diagnostics runs, which can be
 	// expensive.

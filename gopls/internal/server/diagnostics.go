@@ -57,16 +57,48 @@ func (s *server) Diagnostic(ctx context.Context, params *protocol.DocumentDiagno
 
 	uri := fh.URI()
 	kind := snapshot.FileKind(fh)
-	var diagnostics []*cache.Diagnostic
-	switch kind {
-	case file.Go:
-		diagnostics, err = golang.DiagnoseFile(ctx, snapshot, uri)
-		if err != nil {
-			return nil, err
-		}
-	default:
+	if kind != file.Go {
 		return nil, fmt.Errorf("pull diagnostics not supported for this file kind")
 	}
+
+	// Stage 3d: try the pool-shared cache first. The cache may have been
+	// filled by a recent push pass on another connection (widest-package
+	// analysis) or by a previous pull on the same file (narrowest-package).
+	// We accept either: an entry is current iff its snapshot sequence is
+	// at least our snapshot's, its file version matches, and it carries
+	// final=true. The final check excludes fast-pass entries written by
+	// diagnoseChangedFiles before DiagnosticsDelay expires — those omit
+	// go/analysis diagnostics, and serving them to a pull client would be
+	// a silent regression. See proposal §3.1.
+	store := s.diagStore()
+	if cur, ok := store.get(uri, snapshot.View()); ok && cur.final &&
+		cur.snapshot >= snapshot.SequenceID() && cur.version == fh.Version() {
+		return &protocol.DocumentDiagnosticReport{
+			Value: protocol.RelatedFullDocumentDiagnosticReport{
+				FullDocumentDiagnosticReport: protocol.FullDocumentDiagnosticReport{
+					Items: cache.ToProtocolDiagnostics(cur.diagnostics...),
+				},
+			},
+		}, nil
+	}
+
+	diagnostics, err := golang.DiagnoseFile(ctx, snapshot, uri)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fill the cache. golang.DiagnoseFile runs both type-checking and
+	// analysis (Stage 3d treats it as final), so a later push pass for the
+	// same snapshot is allowed to overwrite — both entries are widest- vs
+	// narrowest-package complete and final. The cache.store freshness
+	// rule prevents a stale (older-snapshot) write from overwriting it.
+	store.store(uri, snapshot.View(), viewDiagnostics{
+		snapshot:    snapshot.SequenceID(),
+		version:     fh.Version(),
+		diagnostics: diagnostics,
+		final:       true,
+	})
+
 	return &protocol.DocumentDiagnosticReport{
 		Value: protocol.RelatedFullDocumentDiagnosticReport{
 			FullDocumentDiagnosticReport: protocol.FullDocumentDiagnosticReport{
@@ -76,7 +108,12 @@ func (s *server) Diagnostic(ctx context.Context, params *protocol.DocumentDiagno
 	}, nil
 }
 
-// fileDiagnostics holds the current state of published diagnostics for a file.
+// fileDiagnostics holds the per-connection state of published diagnostics
+// for a file. Compute results (the byView map prior to Stage 3d) live on
+// the pool-scoped DiagnosticCache so that multiple connections attached to
+// the same pooled session share them; only the publish-bookkeeping fields
+// remain here, since they describe what this server has sent on its own
+// client wire.
 type fileDiagnostics struct {
 	publishedHash file.Hash // hash of the last set of diagnostics published for this URI
 	mustPublish   bool      // if set, publish diagnostics even if they haven't changed
@@ -86,11 +123,6 @@ type fileDiagnostics struct {
 	// which they were orphaned (see server.lastModificationID).
 	orphanedAt              uint64 // modification ID at which this file was orphaned.
 	orphanedFileDiagnostics []*cache.Diagnostic
-
-	// Files may have their diagnostics computed by multiple views, and so
-	// diagnostics are organized by View. See the documentation for update for more
-	// details about how the set of file diagnostics evolves over time.
-	byView map[*cache.View]viewDiagnostics
 }
 
 // viewDiagnostics holds a set of file diagnostics computed from a given View.
@@ -98,6 +130,106 @@ type viewDiagnostics struct {
 	snapshot    uint64 // snapshot sequence ID
 	version     int32  // file version
 	diagnostics []*cache.Diagnostic
+	// final is true when these diagnostics are the result of a complete
+	// pass — package + go/analysis (and pull's golang.DiagnoseFile, which
+	// always runs analysis). It is false for fast-pass entries written
+	// before DiagnosticsDelay expires (diagnoseChangedFiles), which run
+	// only type-checking. Pull cache hits require final, otherwise they
+	// would silently drop analyzer-produced diagnostics during the
+	// ~DiagnosticsDelay window.
+	final bool
+}
+
+// DiagnosticCache is a pool-scoped store of computed diagnostic results,
+// shared across *server connections attached to the same pooled session.
+//
+// Stage 3d moves the per-file byView map (compute results) out of *server's
+// per-connection fileDiagnostics into this cache. The publish state —
+// publishedHash, mustPublish, orphanedAt — remains per-connection.
+//
+// Push (s.diagnose, workspace-wide, widest-package analysis) and pull
+// (golang.DiagnoseFile, single-URI, narrowest-package) both fill the same
+// entries; pull therefore reads widest-package results when push got there
+// first. This is the proposal's "second cli check served from cache" mode.
+//
+// See kb-gopls-skills/v4/CAPABILITY_DRIVEN_PROPOSAL.md §3.1.
+type DiagnosticCache struct {
+	mu    sync.Mutex
+	byURI map[protocol.DocumentURI]map[*cache.View]viewDiagnostics
+}
+
+// NewDiagnosticCache returns an empty DiagnosticCache.
+func NewDiagnosticCache() *DiagnosticCache {
+	return &DiagnosticCache{
+		byURI: make(map[protocol.DocumentURI]map[*cache.View]viewDiagnostics),
+	}
+}
+
+// store records vd under (uri, view) if vd is fresher than what's there:
+// either no existing entry, an entry from an older snapshot, or the same
+// snapshot when vd.final is true. This mirrors the pre-Stage-3d ordering
+// rule from updateAndPublish (see https://github.com/golang/go/issues/64765).
+func (c *DiagnosticCache) store(uri protocol.DocumentURI, view *cache.View, vd viewDiagnostics) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	byView := c.byURI[uri]
+	if byView == nil {
+		byView = make(map[*cache.View]viewDiagnostics)
+		c.byURI[uri] = byView
+	}
+	cur, ok := byView[view]
+	if !ok || cur.snapshot < vd.snapshot || (cur.snapshot == vd.snapshot && vd.final) {
+		byView[view] = vd
+	}
+}
+
+// get returns the cached entry for (uri, view).
+func (c *DiagnosticCache) get(uri protocol.DocumentURI, view *cache.View) (viewDiagnostics, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	vd, ok := c.byURI[uri][view]
+	return vd, ok
+}
+
+// reconcile prunes entries for URIs whose view is no longer in keep, and
+// returns the surviving (view, viewDiagnostics) entries for uri at the
+// given file version. Entries for the wrong version are skipped but not
+// pruned — they may still be valid for a different attached connection.
+func (c *DiagnosticCache) reconcile(uri protocol.DocumentURI, keep viewSet, version int32) (allViews []*cache.View, byView map[*cache.View]viewDiagnostics) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	src := c.byURI[uri]
+	if src == nil {
+		return nil, nil
+	}
+	byView = make(map[*cache.View]viewDiagnostics, len(src))
+	for view, vd := range src {
+		if _, ok := keep[view]; !ok {
+			delete(src, view)
+			continue
+		}
+		if vd.version != version {
+			continue
+		}
+		allViews = append(allViews, view)
+		byView[view] = vd
+	}
+	return allViews, byView
+}
+
+// matchingDiagnostics returns all cached diagnostics for uri across all
+// views, used by code-action lookup. The returned slices alias the cache;
+// callers must not mutate them.
+func (c *DiagnosticCache) matchingDiagnostics(uri protocol.DocumentURI) [][]*cache.Diagnostic {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out [][]*cache.Diagnostic
+	for _, vd := range c.byURI[uri] {
+		if len(vd.diagnostics) > 0 {
+			out = append(out, vd.diagnostics)
+		}
+	}
+	return out
 }
 
 // common types; for brevity
@@ -105,6 +237,17 @@ type (
 	viewSet = map[*cache.View]unit
 	diagMap = map[protocol.DocumentURI][]*cache.Diagnostic
 )
+
+// diagStore returns the DiagnosticCache this server uses for compute
+// results. Pooled servers reach the pool-shared cache via the pool entry;
+// standalone servers use a per-server cache. The cache is non-nil in
+// either case.
+func (s *server) diagStore() *DiagnosticCache {
+	if s.poolEntry != nil {
+		return s.poolEntry.DiagnosticCache()
+	}
+	return s.diagStoreLocal
+}
 
 func sortDiagnostics(d []*cache.Diagnostic) {
 	sort.Slice(d, func(i int, j int) bool {
@@ -665,33 +808,26 @@ func (s *server) updateDiagnostics(ctx context.Context, snapshot *cache.Snapshot
 
 	// updateAndPublish updates diagnostics for a file, checking both the latest
 	// diagnostics for the current snapshot, as well as reconciling the set of
-	// views.
+	// views. Compute results live on the pool-shared DiagnosticCache (Stage
+	// 3d); the freshness rule (overwrite only on a newer snapshot, or the
+	// same snapshot when final — see https://github.com/golang/go/issues/64765)
+	// is enforced atomically by DiagnosticCache.store.
 	updateAndPublish := func(uri protocol.DocumentURI, f *fileDiagnostics, diags []*cache.Diagnostic) error {
-		current, ok := f.byView[snapshot.View()]
-		// Update the stored diagnostics if:
-		//  1. we've never seen diagnostics for this view,
-		//  2. diagnostics are for an older snapshot, or
-		//  3. we're overwriting with final diagnostics
-		//
-		// In other words, we shouldn't overwrite existing diagnostics for a
-		// snapshot with non-final diagnostics. This avoids the race described at
-		// https://github.com/golang/go/issues/64765#issuecomment-1890144575.
-		if !ok || current.snapshot < snapshot.SequenceID() || (current.snapshot == snapshot.SequenceID() && final) {
-			fh, err := snapshot.ReadFile(ctx, uri)
-			if err != nil {
-				return err
-			}
-			current = viewDiagnostics{
-				snapshot:    snapshot.SequenceID(),
-				version:     fh.Version(),
-				diagnostics: diags,
-			}
-			if f.byView == nil {
-				f.byView = make(map[*cache.View]viewDiagnostics)
-			}
-			f.byView[snapshot.View()] = current
+		fh, err := snapshot.ReadFile(ctx, uri)
+		if err != nil {
+			return err
 		}
+		s.diagStore().store(uri, snapshot.View(), viewDiagnostics{
+			snapshot:    snapshot.SequenceID(),
+			version:     fh.Version(),
+			diagnostics: diags,
+			final:       final,
+		})
 
+		// The store may have rejected the new entry if the cache already
+		// held a fresher one for this view. Re-read so the publish below
+		// uses the version that's actually in the cache.
+		current, _ := s.diagStore().get(uri, snapshot.View())
 		return s.publishFileDiagnosticsLocked(ctx, viewMap, uri, current.version, f)
 	}
 
@@ -785,6 +921,10 @@ func (s *server) updateOrphanedFileDiagnostics(ctx context.Context, modID uint64
 // publishFileDiagnosticsLocked publishes a fileDiagnostics value, while holding s.diagnosticsMu.
 //
 // If the publication succeeds, it updates f.publishedHash and f.mustPublish.
+//
+// Lock order: callers hold s.diagnosticsMu (outer); this function transiently
+// acquires DiagnosticCache.mu (inner) inside reconcile. Deadlock-free because
+// DiagnosticCache methods are self-contained and never re-enter server code.
 func (s *server) publishFileDiagnosticsLocked(ctx context.Context, views viewSet, uri protocol.DocumentURI, version int32, f *fileDiagnostics) error {
 	// We add a disambiguating suffix (e.g. " [darwin,arm64]") to
 	// each diagnostic that doesn't occur in the default view;
@@ -806,17 +946,14 @@ func (s *server) publishFileDiagnosticsLocked(ctx context.Context, views viewSet
 		add(diag, "")
 	}
 
-	var allViews []*cache.View
-	for view, viewDiags := range f.byView {
-		if _, ok := views[view]; !ok {
-			delete(f.byView, view) // view no longer exists
-			continue
-		}
-		if viewDiags.version != version {
-			continue // a payload of diagnostics applies to a specific file version
-		}
-		allViews = append(allViews, view)
-	}
+	// Collect compute results from the pool-shared cache. reconcile prunes
+	// entries for views that no longer exist and skips entries for stale
+	// versions, returning a per-call snapshot of the surviving entries
+	// (byView). The caller already holds s.diagnosticsMu, but the cache has
+	// its own mutex; lock order is server.diagnosticsMu (outer) → cache.mu
+	// (inner, briefly held inside reconcile and released before return). No
+	// cache method calls back into server code.
+	allViews, byView := s.diagStore().reconcile(uri, views, version)
 
 	// Only report diagnostics from relevant views for a file. This avoids
 	// spurious import errors when a view has only a partial set of dependencies
@@ -842,7 +979,7 @@ func (s *server) publishFileDiagnosticsLocked(ctx context.Context, views viewSet
 	}
 
 	for _, view := range relevantViews {
-		viewDiags := f.byView[view]
+		viewDiags := byView[view]
 		// Compute the view's suffix (e.g. " [darwin,arm64]").
 		var suffix string
 		{

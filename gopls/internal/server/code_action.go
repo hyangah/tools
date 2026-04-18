@@ -342,22 +342,19 @@ func codeActionsForDiagnostic(ctx context.Context, snapshot *cache.Snapshot, sd 
 }
 
 func (s *server) findMatchingDiagnostics(uri protocol.DocumentURI, pd protocol.Diagnostic) []*cache.Diagnostic {
-	s.diagnosticsMu.Lock()
-	defer s.diagnosticsMu.Unlock()
-
+	// Compute results live on the pool-shared DiagnosticCache (Stage 3d);
+	// the cache provides its own locking, so no s.diagnosticsMu is needed.
 	var sds []*cache.Diagnostic
-	if fileDiags := s.diagnostics[uri]; fileDiags != nil {
-		for _, viewDiags := range fileDiags.byView {
-			for _, sd := range viewDiags.diagnostics {
-				// extra space may have been trimmed when
-				// converting to protocol.Diagnostic
-				sameDiagnostic := pd.Message == strings.TrimSpace(sd.Message) &&
-					protocol.CompareRange(pd.Range, sd.Range) == 0 &&
-					pd.Source == string(sd.Source)
+	for _, viewDiags := range s.diagStore().matchingDiagnostics(uri) {
+		for _, sd := range viewDiags {
+			// extra space may have been trimmed when
+			// converting to protocol.Diagnostic
+			sameDiagnostic := pd.Message == strings.TrimSpace(sd.Message) &&
+				protocol.CompareRange(pd.Range, sd.Range) == 0 &&
+				pd.Source == string(sd.Source)
 
-				if sameDiagnostic {
-					sds = append(sds, sd)
-				}
+			if sameDiagnostic {
+				sds = append(sds, sd)
 			}
 		}
 	}

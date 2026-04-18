@@ -14,6 +14,7 @@ import (
 	"golang.org/x/tools/gopls/internal/cache"
 	"golang.org/x/tools/gopls/internal/filewatcher"
 	"golang.org/x/tools/gopls/internal/protocol"
+	"golang.org/x/tools/gopls/internal/server"
 	"golang.org/x/tools/gopls/internal/settings"
 	"golang.org/x/tools/internal/event"
 )
@@ -66,6 +67,9 @@ type pooledSession struct {
 	// capability-based opt-out comes in Stage 3b. See proposal §3.1.
 	subsMu          sync.Mutex
 	pushSubscribers int
+
+	diagCacheOnce sync.Once
+	diagCache     *server.DiagnosticCache
 }
 
 // EnsureWatcher implements server.PoolEntry. It creates the pool-scoped
@@ -148,6 +152,16 @@ func (ps *pooledSession) HasPushSubscribers() bool {
 	ps.subsMu.Lock()
 	defer ps.subsMu.Unlock()
 	return ps.pushSubscribers > 0
+}
+
+// DiagnosticCache implements server.PoolEntry. The cache is created on
+// first call and reused for the pool entry's lifetime, so all attached
+// *server connections share the same compute-results store.
+func (ps *pooledSession) DiagnosticCache() *server.DiagnosticCache {
+	ps.diagCacheOnce.Do(func() {
+		ps.diagCache = server.NewDiagnosticCache()
+	})
+	return ps.diagCache
 }
 
 // closeWatcher stops and discards the pool-scoped watcher. Called by
