@@ -1071,6 +1071,50 @@ func (e *Editor) Diagnostics(ctx context.Context, path string) ([]protocol.Diagn
 	return report.Items, nil
 }
 
+// WorkspaceDiagnostics issues a workspace/diagnostic LSP request and
+// returns one slice per WorkspaceFullDocumentDiagnosticReport keyed by
+// URI. Returns an error if the server hasn't advertised
+// diagnosticProvider.workspaceDiagnostics: true.
+func (e *Editor) WorkspaceDiagnostics(ctx context.Context) (map[protocol.DocumentURI][]protocol.Diagnostic, error) {
+	if e.Server == nil {
+		return nil, errors.New("not connected")
+	}
+	e.mu.Lock()
+	capabilities := e.serverCapabilities.DiagnosticProvider
+	e.mu.Unlock()
+	if capabilities == nil {
+		return nil, errors.New("server does not support pull diagnostics")
+	}
+	supportsWorkspace := false
+	switch v := capabilities.Value.(type) {
+	case nil:
+		return nil, errors.New("server does not support pull diagnostics")
+	case protocol.DiagnosticOptions:
+		supportsWorkspace = v.WorkspaceDiagnostics
+	case protocol.DiagnosticRegistrationOptions:
+		supportsWorkspace = v.DiagnosticOptions.WorkspaceDiagnostics
+	default:
+		return nil, fmt.Errorf("unknown DiagnosticsProvider type %T", capabilities.Value)
+	}
+	if !supportsWorkspace {
+		return nil, errors.New("server does not support workspace pull diagnostics")
+	}
+
+	report, err := e.Server.DiagnosticWorkspace(ctx, &protocol.WorkspaceDiagnosticParams{})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[protocol.DocumentURI][]protocol.Diagnostic)
+	for _, item := range report.Items {
+		full, ok := item.Value.(protocol.WorkspaceFullDocumentDiagnosticReport)
+		if !ok {
+			continue // skip Unchanged reports (gopls doesn't emit them today)
+		}
+		out[full.URI] = full.Items
+	}
+	return out, nil
+}
+
 // GetQuickFixes returns the available quick fix code actions.
 func (e *Editor) GetQuickFixes(ctx context.Context, loc protocol.Location, diagnostics []protocol.Diagnostic) ([]protocol.CodeAction, error) {
 	return e.CodeActions(ctx, loc, diagnostics, protocol.QuickFix, protocol.SourceFixAll)

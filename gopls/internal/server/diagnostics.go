@@ -61,44 +61,10 @@ func (s *server) Diagnostic(ctx context.Context, params *protocol.DocumentDiagno
 		return nil, fmt.Errorf("pull diagnostics not supported for this file kind")
 	}
 
-	// Stage 3d: try the pool-shared cache first. The cache may have been
-	// filled by a recent push pass on another connection (widest-package
-	// analysis) or by a previous pull on the same file (narrowest-package).
-	// We accept either: an entry is current iff its snapshot sequence is
-	// at least our snapshot's, its file version matches, and it carries
-	// final=true. The final check excludes fast-pass entries written by
-	// diagnoseChangedFiles before DiagnosticsDelay expires — those omit
-	// go/analysis diagnostics, and serving them to a pull client would be
-	// a silent regression. See proposal §3.1.
-	store := s.diagStore()
-	if cur, ok := store.get(uri, snapshot.View()); ok && cur.final &&
-		cur.snapshot >= snapshot.SequenceID() && cur.version == fh.Version() {
-		return &protocol.DocumentDiagnosticReport{
-			Value: protocol.RelatedFullDocumentDiagnosticReport{
-				FullDocumentDiagnosticReport: protocol.FullDocumentDiagnosticReport{
-					Items: cache.ToProtocolDiagnostics(cur.diagnostics...),
-				},
-			},
-		}, nil
-	}
-
-	diagnostics, err := golang.DiagnoseFile(ctx, snapshot, uri)
+	diagnostics, err := s.pullDiagnostics(ctx, snapshot, fh, uri)
 	if err != nil {
 		return nil, err
 	}
-
-	// Fill the cache. golang.DiagnoseFile runs both type-checking and
-	// analysis (Stage 3d treats it as final), so a later push pass for the
-	// same snapshot is allowed to overwrite — both entries are widest- vs
-	// narrowest-package complete and final. The cache.store freshness
-	// rule prevents a stale (older-snapshot) write from overwriting it.
-	store.store(uri, snapshot.View(), viewDiagnostics{
-		snapshot:    snapshot.SequenceID(),
-		version:     fh.Version(),
-		diagnostics: diagnostics,
-		final:       true,
-	})
-
 	return &protocol.DocumentDiagnosticReport{
 		Value: protocol.RelatedFullDocumentDiagnosticReport{
 			FullDocumentDiagnosticReport: protocol.FullDocumentDiagnosticReport{
@@ -106,6 +72,132 @@ func (s *server) Diagnostic(ctx context.Context, params *protocol.DocumentDiagno
 			},
 		},
 	}, nil
+}
+
+// DiagnosticWorkspace implements the workspace/diagnostic LSP request
+// (LSP 3.17), reporting diagnostics across all workspace Go files in one
+// call. Used by `cli check ./...` to avoid N round-trips of per-file
+// pull. Per-URI results come from the same pool-shared cache that
+// Diagnostic uses, so a second concurrent workspace pull (or a per-file
+// pull on the same snapshot) reuses the work.
+//
+// Stage 3e ships the minimum-correct shape:
+//   - Returns the entire result in WorkspaceDiagnosticReport.Items;
+//     partial-result streaming via WorkspaceDiagnosticReportPartialResult
+//     is allowed by the spec but optional, and CLI clients don't request
+//     it.
+//   - Always emits WorkspaceFullDocumentDiagnosticReport — never the
+//     "Unchanged" variant. resultID/PreviousResultIds (incremental pull)
+//     is a future optimization; today every call computes (or cache-hits)
+//     fresh.
+//   - Iterates Go files in workspace package metadata. Non-Go files
+//     (go.mod, go.work, templates) are not included; clients that want
+//     them must use per-file pull.
+//
+// Perf note: per-file pullDiagnostics calls golang.DiagnoseFile, which
+// computes for one URI's narrowest package and stores only that URI in
+// the cache. Files in the same package therefore re-trigger the
+// type-check and analysis. Snapshot-level memoization absorbs most of
+// the cost (PackageDiagnostics and analysis results are cached on the
+// snapshot), so the real waste is the cache-miss overhead per file.
+// See proposal §3.4 for the long-term shape (workspace-wide compute
+// pass that fills cache for every package's URIs in one go).
+func (s *server) DiagnosticWorkspace(ctx context.Context, params *protocol.WorkspaceDiagnosticParams) (*protocol.WorkspaceDiagnosticReport, error) {
+	ctx, done := event.Start(ctx, "server.DiagnosticWorkspace")
+	defer done()
+
+	jsonrpc2.Async(ctx) // workspace pulls can take seconds
+
+	views := s.session.Views()
+	if len(views) == 0 {
+		return &protocol.WorkspaceDiagnosticReport{}, nil
+	}
+
+	var (
+		items []protocol.WorkspaceDocumentDiagnosticReport
+		seen  = make(map[protocol.DocumentURI]bool)
+	)
+	for _, view := range views {
+		snapshot, release, err := view.Snapshot()
+		if err != nil {
+			continue // view shutting down
+		}
+		meta, err := snapshot.WorkspaceMetadata(ctx)
+		if err != nil {
+			release()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		for _, mp := range meta {
+			for _, uri := range mp.CompiledGoFiles {
+				if seen[uri] {
+					continue // a URI may be reachable from multiple packages
+				}
+				seen[uri] = true
+
+				fh, err := snapshot.ReadFile(ctx, uri)
+				if err != nil {
+					continue
+				}
+				diagnostics, err := s.pullDiagnostics(ctx, snapshot, fh, uri)
+				if err != nil {
+					if ctx.Err() != nil {
+						release()
+						return nil, ctx.Err()
+					}
+					continue
+				}
+				items = append(items, protocol.WorkspaceDocumentDiagnosticReport{
+					Value: protocol.WorkspaceFullDocumentDiagnosticReport{
+						URI:     uri,
+						Version: fh.Version(),
+						FullDocumentDiagnosticReport: protocol.FullDocumentDiagnosticReport{
+							Items: cache.ToProtocolDiagnostics(diagnostics...),
+						},
+					},
+				})
+			}
+		}
+		release()
+	}
+	return &protocol.WorkspaceDiagnosticReport{Items: items}, nil
+}
+
+// pullDiagnostics returns the diagnostics for uri at the given snapshot,
+// reading from the pool-shared cache when an entry is current and
+// computing inline (filling the cache) on miss. Used by both the per-file
+// Diagnostic handler and the workspace DiagnosticWorkspace handler.
+//
+// A cache entry is current when:
+//   - it is final (see viewDiagnostics.final — fast-pass entries lack
+//     analysis and are silently incomplete for pull); and
+//   - its snapshot sequence is at least the requested snapshot's; and
+//   - its file version matches.
+//
+// On miss, golang.DiagnoseFile runs the narrowest-package compute
+// (type-check + analysis) and the result is stored with final=true. A
+// later workspace-wide push pass may overwrite with widest-package
+// results — also final, also a superset — without violating freshness.
+// See proposal §3.1.
+func (s *server) pullDiagnostics(ctx context.Context, snapshot *cache.Snapshot, fh file.Handle, uri protocol.DocumentURI) ([]*cache.Diagnostic, error) {
+	store := s.diagStore()
+	if cur, ok := store.get(uri, snapshot.View()); ok && cur.final &&
+		cur.snapshot >= snapshot.SequenceID() && cur.version == fh.Version() {
+		return cur.diagnostics, nil
+	}
+	diagnostics, err := golang.DiagnoseFile(ctx, snapshot, uri)
+	if err != nil {
+		return nil, err
+	}
+	store.store(uri, snapshot.View(), viewDiagnostics{
+		snapshot:    snapshot.SequenceID(),
+		version:     fh.Version(),
+		diagnostics: diagnostics,
+		final:       true,
+	})
+	return diagnostics, nil
 }
 
 // fileDiagnostics holds the per-connection state of published diagnostics

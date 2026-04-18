@@ -22,10 +22,6 @@ func (s *server) Declaration(context.Context, *protocol.DeclarationParams) (*pro
 	return nil, notImplemented("Declaration")
 }
 
-func (s *server) DiagnosticWorkspace(context.Context, *protocol.WorkspaceDiagnosticParams) (*protocol.WorkspaceDiagnosticReport, error) {
-	return nil, notImplemented("DiagnosticWorkspace")
-}
-
 func (s *server) DidChangeNotebookDocument(context.Context, *protocol.DidChangeNotebookDocumentParams) error {
 	return notImplemented("DidChangeNotebookDocument")
 }

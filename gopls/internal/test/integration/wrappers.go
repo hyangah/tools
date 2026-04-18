@@ -262,6 +262,17 @@ func (e *Env) Diagnostics(name string) []protocol.Diagnostic {
 	return diags
 }
 
+// WorkspaceDiagnostics returns workspace-wide pull diagnostics keyed by
+// URI, calling t.Fatal on any error.
+func (e *Env) WorkspaceDiagnostics() map[protocol.DocumentURI][]protocol.Diagnostic {
+	e.TB.Helper()
+	diags, err := e.Editor.WorkspaceDiagnostics(e.Ctx)
+	if err != nil {
+		e.TB.Fatal(err)
+	}
+	return diags
+}
+
 // GetQuickFixes returns the available quick fix code actions, calling t.Fatal
 // on any error.
 func (e *Env) GetQuickFixes(path string, diagnostics []protocol.Diagnostic) []protocol.CodeAction {

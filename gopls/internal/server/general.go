@@ -115,7 +115,7 @@ func (s *server) Initialize(ctx context.Context, params *protocol.ParamInitializ
 		diagnosticProvider = &protocol.Or_ServerCapabilities_diagnosticProvider{
 			Value: protocol.DiagnosticOptions{
 				InterFileDependencies: true,
-				WorkspaceDiagnostics:  false, // we don't support workspace/diagnostic
+				WorkspaceDiagnostics:  true, // Stage 3e: workspace/diagnostic implemented.
 			},
 		}
 	}
