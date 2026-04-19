@@ -42,11 +42,11 @@ func (benchClient) Configuration(context.Context, *protocol.ParamConfiguration) 
 	return nil, nil
 }
 
-// TestCLIBenchmark measures the performance of various CLI operations
-// against the gopls codebase. This is not a Go benchmark (b.N loop)
-// because the cold start must be measured exactly once.
+// TestCLIBenchmark measures the in-process performance of CLI operations
+// (no IPC overhead). For end-to-end benchmarks including process startup
+// and LSP handshake overhead, use benchmark.sh in the v4 KB directory.
 //
-// Run with: go test -run TestCLIBenchmark -v -count=1
+// Run with: GOPLS_BENCH_ROOT=/path/to/gopls go test -run TestCLIBenchmark -v -count=1
 func TestCLIBenchmark(t *testing.T) {
 	testenv.NeedsTool(t, "go")
 
