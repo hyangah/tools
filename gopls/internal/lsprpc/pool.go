@@ -22,7 +22,7 @@ import (
 
 // defaultIdleTimeout is how long a pooled session lives without any active
 // connections before it is evicted.
-const defaultIdleTimeout = 15 * time.Minute
+const defaultIdleTimeout = 5 * time.Minute
 
 // poolKey identifies a pooled session. For now it uses only the workspace
 // root path; a configHash field may be added later for configuration-aware
