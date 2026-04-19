@@ -6,7 +6,9 @@ package lsprpc
 
 import (
 	"context"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -259,5 +261,157 @@ func TestSessionPool_Shutdown(t *testing.T) {
 
 	if p.len() != 0 {
 		t.Fatalf("pool len = %d after shutdown, want 0", p.len())
+	}
+}
+
+// TestSessionPool_EvictionRace exercises the narrow race window where the
+// idle-eviction timer fires at roughly the same time as a concurrent
+// acquire or register for the same key. The pool serializes both paths
+// under p.mu, so only two clean outcomes are possible:
+//
+//   - acquire wins: acquire returns the existing (live) session; evict later
+//     re-checks refCount > 0 and does nothing.
+//   - evict wins: evict deletes the entry; acquire (or register) returns nil /
+//     creates a fresh session.
+//
+// The test verifies that under high concurrency with a very short idle
+// timeout there are no data races, no panics, and every non-nil session
+// returned by acquire or register has a paired release so refCount stays
+// consistent.
+func TestSessionPool_EvictionRace(t *testing.T) {
+	const (
+		numGoroutines = 8
+		numIterations = 500
+	)
+
+	c := cache.New(nil)
+	// Very short timeout: 1ms makes the timer fire frequently during the
+	// acquire/release loop, maximising overlap with the eviction path.
+	p := newSessionPool(c, 1*time.Millisecond)
+
+	key := poolKey{root: "/race-project"}
+
+	// Kill switch: if the test stalls, surface it as a panic within the
+	// test timeout rather than hanging indefinitely.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			panic("TestSessionPool_EvictionRace: test hung after 3s")
+		}
+	}()
+
+	// loserShutdowns counts register calls that lost the race and whose
+	// newly created session was shut down by this test. Tracked only to
+	// ensure the cleanup path is exercised.
+	var loserShutdowns atomic.Int64
+
+	var wg sync.WaitGroup
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < numIterations; j++ {
+				// Try to acquire an existing session first.
+				sess, entry := p.acquire(key)
+				if (sess == nil) != (entry == nil) {
+					// Invariant: both nil or both non-nil.
+					panic("acquire returned inconsistent (sess, entry) pair")
+				}
+				if sess != nil {
+					// Got a live session; release it to re-arm the idle timer.
+					p.release(key)
+					// Yield so other goroutines can also race this window.
+					runtime.Gosched()
+					continue
+				}
+
+				// No session present — register a fresh one.
+				newSess := cache.NewSession(context.Background(), c)
+				winner, winEntry := p.register(key, newSess)
+				if (winner == nil) != (winEntry == nil) {
+					panic("register returned inconsistent (session, entry) pair")
+				}
+				if winner != newSess {
+					// Lost the registration race: another goroutine already
+					// registered for this key. Shut down the loser session so
+					// we don't leak goroutines or cache resources.
+					loserShutdowns.Add(1)
+					newSess.Shutdown(context.Background())
+				}
+				// Whether we won or lost the register race, we hold a
+				// reference via register's refCount increment. Release it.
+				p.release(key)
+				runtime.Gosched()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// After all goroutines finish, shut down the pool cleanly. Any
+	// remaining pooled session must still be in a valid state.
+	p.shutdown()
+
+	if got := p.len(); got != 0 {
+		t.Errorf("pool.len() = %d after shutdown, want 0", got)
+	}
+
+	_ = loserShutdowns.Load() // prevent unused-variable warning
+}
+
+// TestSessionPool_AcquireAfterEvictionFired is a deterministic companion to
+// TestSessionPool_EvictionRace. It verifies the specific "timer fires, then
+// acquire races it" path without relying on goroutine scheduling jitter.
+//
+// Each round registers a session, releases it immediately (starting the
+// 1ms idle timer), then busy-polls acquire until either:
+//   - acquire wins: returns the session (timer was stopped in time), or
+//   - evict wins: acquire returns (nil, nil) (entry was deleted first).
+//
+// Both outcomes are valid; the test checks only that the result is
+// internally consistent — no half-torn-down entries, no panics, and
+// p.len() matches expectations. Under -race this deterministic loop
+// exercises both orderings within the race detector's window.
+func TestSessionPool_AcquireAfterEvictionFired(t *testing.T) {
+	c := cache.New(nil)
+	p := newSessionPool(c, 1*time.Millisecond)
+	defer p.shutdown()
+
+	key := poolKey{root: "/det-project"}
+
+	const rounds = 200
+	for i := 0; i < rounds; i++ {
+		sess := cache.NewSession(context.Background(), c)
+		winner, _ := p.register(key, sess)
+		if winner != sess {
+			// This branch cannot happen in a single-goroutine loop because
+			// each round either evicts cleanly (pool empty) or wins the
+			// register. But be safe: shut down the loser anyway.
+			sess.Shutdown(context.Background())
+		}
+		// refCount → 0, idle timer arms (1ms).
+		p.release(key)
+
+		// Busy-poll until one of the two clean outcomes is observed.
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			got, entry := p.acquire(key)
+			if (got == nil) != (entry == nil) {
+				t.Fatalf("round %d: acquire returned inconsistent pair (sess=%v entry=%v)", i, got, entry)
+			}
+			if got != nil {
+				// Acquire won the race; release and move on to next round.
+				p.release(key)
+				break
+			}
+			// Evict won — pool must report len 0.
+			if l := p.len(); l != 0 {
+				t.Fatalf("round %d: pool.len() = %d after eviction, want 0", i, l)
+			}
+			break
+		}
 	}
 }

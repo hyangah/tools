@@ -155,21 +155,16 @@ package main
 var X int
 `
 
-// TestSessionPoolDiskEditBetweenConnections is the Stage 0 regression test
-// for session-scoped file watchers. It exercises the gap the v4
-// per-connection watcher design cannot cover: a disk edit that occurs
-// after connection 1 shuts down but before connection 2 attaches to the
-// same pooled session.
-//
-// Expected behavior: fails on lspbroker-v4 and earlier; passes after
-// Stage 1 moves file-watcher ownership from *server to pooledSession so
-// that the watcher survives across connections and invalidates the
-// session's snapshot when disk content changes in the gap.
+// TestSessionPoolDiskEditBetweenConnections exercises the gap where a disk
+// edit occurs after connection 1 shuts down but before connection 2 attaches
+// to the same pooled session. The pool-scoped watcher must survive across
+// connections and invalidate the session's snapshot when disk content changes
+// in the gap.
 //
 // Why Definition on a cross-file reference: conn1 walks from main.go to
 // lib.go, which the snapshot caches. Since lib.go is never sent via
 // didOpen by either editor, only a server-side watcher event can
-// invalidate that cached handle. See research/FILE_WATCHER_AUDIT.md.
+// invalidate that cached handle.
 func TestSessionPoolDiskEditBetweenConnections(t *testing.T) {
 	testenv.NeedsTool(t, "go")
 
@@ -188,7 +183,7 @@ func TestSessionPoolDiskEditBetweenConnections(t *testing.T) {
 
 	// Enable the server-side fsnotify watcher: the gopls default is "off",
 	// so without this the pool-scoped watcher never exists and no disk-edit
-	// invalidation can happen. Stage 1 depends on the watcher running.
+	// invalidation can happen.
 	editorCfg := fake.EditorConfig{
 		Settings: map[string]any{"fileWatcher": "fsnotify"},
 	}
@@ -237,9 +232,9 @@ func TestSessionPoolDiskEditBetweenConnections(t *testing.T) {
 
 	// Disk edit: shift X's declaration by 2 lines. Written via os.WriteFile,
 	// not Workdir.WriteFile, so no client-side watcher notification fires
-	// (there is no attached editor anyway). Only a server-side watcher
-	// living past conn1's shutdown could observe this — which is exactly
-	// the invariant Stage 1 establishes.
+	// (there is no attached editor anyway). Only the pool-scoped watcher,
+	// which survives across connections, can observe this disk edit and
+	// invalidate the snapshot.
 	const newLibContents = `package main
 
 
@@ -284,8 +279,8 @@ var X int
 	wantLine := origLine + wantShift
 	if gotLine != wantLine {
 		t.Errorf("Definitions line after between-connection disk edit = %d, want %d (shift of %d from original line %d); "+
-			"stale lib.go handle survived across the pooled session. "+
-			"See research/FILE_WATCHER_AUDIT.md for Stage 0 / Stage 1 rationale.",
+			"stale lib.go handle survived across the pooled session: "+
+			"pool-scoped watcher did not invalidate the snapshot in the gap between connections",
 			gotLine, wantLine, wantShift, origLine)
 	}
 
@@ -294,18 +289,17 @@ var X int
 	}
 }
 
-// TestSessionPoolWatcherFanOutIntegration exercises Stage 3c′: the
-// pool-scoped file watcher must fan disk-edit events out to currently
-// attached push-diagnostic subscribers, restoring the
-// publishDiagnostics behavior that Stage 1 explicitly regressed.
+// TestSessionPoolWatcherFanOutIntegration verifies that the pool-scoped
+// file watcher fans disk-edit events out to currently attached
+// push-diagnostic subscribers. When a disk edit occurs on a file that
+// is not open in the editor (no overlay), the watcher event must
+// trigger session invalidation, kick a re-diagnose pass, and deliver
+// publishDiagnostics to any attached editor.
 //
-// The disk edit must target a file that is *not* open in the editor —
-// for an open file, the session's overlay takes precedence over disk
-// content and no re-diagnose fires. We open main.go (which references
-// lib.X) and then break lib.go on disk; the watcher must fan out, the
-// re-diagnose must run, and publishDiagnostics for main.go (which now
-// has an unresolved-symbol error from the broken lib package) must
-// reach the editor.
+// We open main.go (which references lib.X) and then break lib.go on
+// disk; the fan-out must fire, the re-diagnose must run, and
+// publishDiagnostics for main.go (which now has an unresolved-symbol
+// error from the broken lib package) must reach the editor.
 func TestSessionPoolWatcherFanOutIntegration(t *testing.T) {
 	testenv.NeedsTool(t, "go")
 
@@ -404,7 +398,7 @@ draining:
 				return // restored fan-out fired; test passes.
 			}
 		case <-timeout:
-			t.Fatalf("did not receive non-empty publishDiagnostics for %s after disk edit (Stage 3c′ fan-out not wired)", mainURI)
+			t.Fatalf("did not receive non-empty publishDiagnostics for %s after disk edit (pool-scoped watcher fan-out not wired)", mainURI)
 		}
 	}
 }
@@ -440,6 +434,273 @@ func TestSessionPoolEvictionIntegration(t *testing.T) {
 
 	if got := ss.pool.len(); got != 0 {
 		t.Errorf("pool.len() after eviction = %d, want 0", got)
+	}
+}
+
+// TestSessionPoolConcurrentClients verifies that two LSP connections
+// attached simultaneously to the same workspace root share a single pool
+// entry (pool.len()==1) and that the internal reference count reaches 2
+// while both connections are open.  Both clients must be able to serve
+// Definition queries from the shared session, and the pool entry should
+// return to refCount==1 after the first client disconnects and to idle
+// (refCount==0, pool.len()==1) after both disconnect.
+func TestSessionPoolConcurrentClients(t *testing.T) {
+	testenv.NeedsTool(t, "go")
+
+	sb, err := fake.NewSandbox(&fake.SandboxConfig{Files: fake.UnpackTxt(poolTestProgram)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Close()
+
+	ss := NewStreamServer(cache.New(nil), false, nil)
+	ss.EnableSessionPool(time.Minute)
+	ts := servertest.NewPipeServer(ss, nil)
+	defer checkClose(t, ts.Close)
+
+	ctx := t.Context()
+
+	// poolRefCount reads the reference count of the (sole) pool entry,
+	// holding pool.mu for safety.  It fails the test if the pool doesn't
+	// have exactly one entry.
+	poolRefCount := func(t *testing.T) int {
+		t.Helper()
+		ss.pool.mu.Lock()
+		defer ss.pool.mu.Unlock()
+		if got := len(ss.pool.sessions); got != 1 {
+			t.Errorf("pool has %d entries, want 1", got)
+			return -1
+		}
+		for _, ps := range ss.pool.sessions {
+			return ps.refCount
+		}
+		return -1
+	}
+
+	defLoc := func(ed *fake.Editor) protocol.Location {
+		return protocol.Location{
+			URI: ed.DocumentURI("main.go"),
+			Range: protocol.Range{
+				Start: protocol.Position{Line: 9, Character: 14}, // Hello() call
+				End:   protocol.Position{Line: 9, Character: 19},
+			},
+		}
+	}
+
+	// First connection: cold start.
+	ed1, err := fake.NewEditor(sb, fake.EditorConfig{}).Connect(ctx, ts, fake.ClientHooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ed1.OpenFile(ctx, "main.go"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify first connection's Definition works.
+	locs1, err := ed1.Definitions(ctx, defLoc(ed1))
+	if err != nil {
+		t.Fatalf("Definitions on first connection: %v", err)
+	}
+	if len(locs1) == 0 || locs1[0].Range.Start.Line != 4 {
+		t.Fatalf("unexpected Definitions result on first connection: %v", locs1)
+	}
+
+	// Pool should have one entry with refCount==1 now.
+	if got := ss.pool.len(); got != 1 {
+		t.Errorf("pool.len() after first connection = %d, want 1", got)
+	}
+	if got := poolRefCount(t); got != 1 {
+		t.Errorf("refCount with one client = %d, want 1", got)
+	}
+
+	// Second connection: warm path — ed1 is still attached.
+	ed2, err := fake.NewEditor(sb, fake.EditorConfig{}).Connect(ctx, ts, fake.ClientHooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ed2.OpenFile(ctx, "main.go"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both connections are simultaneously active; pool must still have
+	// exactly one entry (they share the same session) with refCount==2.
+	if got := ss.pool.len(); got != 1 {
+		t.Errorf("pool.len() with two concurrent clients = %d, want 1", got)
+	}
+	if got := poolRefCount(t); got != 2 {
+		t.Errorf("refCount with two concurrent clients = %d, want 2", got)
+	}
+
+	// Both clients must be able to serve queries from the shared session.
+	locs2, err := ed2.Definitions(ctx, defLoc(ed2))
+	if err != nil {
+		t.Fatalf("Definitions on second concurrent connection: %v", err)
+	}
+	if len(locs2) == 0 || locs2[0].Range.Start.Line != 4 {
+		t.Fatalf("unexpected Definitions result on second connection: %v", locs2)
+	}
+
+	// Close first client: refCount drops to 1, pool entry stays.
+	if err := ed1.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := ss.pool.len(); got != 1 {
+		t.Errorf("pool.len() after first client closes = %d, want 1", got)
+	}
+	if got := poolRefCount(t); got != 1 {
+		t.Errorf("refCount after first client closes = %d, want 1", got)
+	}
+
+	// Close second client: refCount drops to 0, idle timer starts.
+	if err := ed2.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Session stays pooled (idle) — not yet evicted.
+	if got := ss.pool.len(); got != 1 {
+		t.Errorf("pool.len() after both clients close = %d, want 1 (idle, not evicted)", got)
+	}
+}
+
+// TestSessionPoolConcurrentDiagnosticFanOut exercises the fan-out subscriber
+// set with two clients simultaneously attached. An external disk edit to a
+// non-open file triggers re-diagnosis; both clients (each a push-diagnostics
+// subscriber) must receive publishDiagnostics for the affected file.
+func TestSessionPoolConcurrentDiagnosticFanOut(t *testing.T) {
+	testenv.NeedsTool(t, "go")
+
+	const program = `
+-- go.mod --
+module example.com/concurrentfanout
+
+go 1.21
+-- main.go --
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println(X)
+}
+-- lib.go --
+package main
+
+var X = 1
+`
+
+	sb, err := fake.NewSandbox(&fake.SandboxConfig{Files: fake.UnpackTxt(program)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Close()
+
+	ss := NewStreamServer(cache.New(nil), false, nil)
+	ss.EnableSessionPool(time.Minute)
+	ts := servertest.NewPipeServer(ss, nil)
+	defer checkClose(t, ts.Close)
+
+	// pubsA/pubsB receive (uri, nDiags) pairs from publishDiagnostics
+	// callbacks for ed1 and ed2 respectively.
+	type pubEvent struct {
+		uri  protocol.DocumentURI
+		ndia int
+	}
+	pubsA := make(chan pubEvent, 64)
+	pubsB := make(chan pubEvent, 64)
+
+	makeHooks := func(ch chan pubEvent) fake.ClientHooks {
+		return fake.ClientHooks{
+			OnDiagnostics: func(_ context.Context, params *protocol.PublishDiagnosticsParams) error {
+				ch <- pubEvent{uri: params.URI, ndia: len(params.Diagnostics)}
+				return nil
+			},
+		}
+	}
+
+	editorCfg := fake.EditorConfig{
+		Settings: map[string]any{"fileWatcher": "fsnotify"},
+	}
+
+	ctx := t.Context()
+
+	// First editor: connect and open main.go. The Hover call forces IWL to
+	// complete and guarantees ed1's session is registered in the pool before
+	// ed2 connects (so ed2 hits the warm acquire path, not a concurrent cold-start).
+	ed1, err := fake.NewEditor(sb, editorCfg).Connect(ctx, ts, makeHooks(pubsA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ed1.Close(ctx)
+	if err := ed1.OpenFile(ctx, "main.go"); err != nil {
+		t.Fatal(err)
+	}
+	// Hover on X forces IWL completion so the pool entry is registered.
+	mainRef, err := ed1.RegexpSearch("main.go", `\bX\b`)
+	if err != nil {
+		t.Fatalf("locating X reference: %v", err)
+	}
+	if _, _, err := ed1.Hover(ctx, mainRef); err != nil {
+		t.Fatalf("Hover on first connection: %v", err)
+	}
+	if got := ss.pool.len(); got != 1 {
+		t.Fatalf("pool.len() after first editor = %d, want 1", got)
+	}
+
+	// Second editor: connects while ed1 is still attached — warm acquire path.
+	ed2, err := fake.NewEditor(sb, editorCfg).Connect(ctx, ts, makeHooks(pubsB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ed2.Close(ctx)
+	if err := ed2.OpenFile(ctx, "main.go"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both should share one pool entry.
+	if got := ss.pool.len(); got != 1 {
+		t.Fatalf("pool.len() with two concurrent clients = %d, want 1", got)
+	}
+
+	mainURI := ed1.DocumentURI("main.go")
+
+	// Drain the initial publishDiagnostics bursts from both clients.
+	drainDeadline := time.After(5 * time.Second)
+draining:
+	for {
+		select {
+		case <-pubsA:
+		case <-pubsB:
+		case <-time.After(300 * time.Millisecond):
+			break draining
+		case <-drainDeadline:
+			t.Fatal("timed out draining initial publishDiagnostics")
+		}
+	}
+
+	// Disk edit: remove X from lib.go — both clients' subscriptions to the
+	// pool-scoped watcher should each receive a non-empty publishDiagnostics
+	// for main.go (undefined: X).
+	const brokenLib = "package main\n"
+	if err := os.WriteFile(sb.Workdir.AbsPath("lib.go"), []byte(brokenLib), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for both clients to receive a diagnostic.  fsnotify debounces
+	// for 500ms; allow up to 10s for re-diagnose + publish to complete.
+	timeout := time.After(10 * time.Second)
+	gotA, gotB := false, false
+	for !gotA || !gotB {
+		select {
+		case ev := <-pubsA:
+			if ev.uri == mainURI && ev.ndia > 0 {
+				gotA = true
+			}
+		case ev := <-pubsB:
+			if ev.uri == mainURI && ev.ndia > 0 {
+				gotB = true
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for publishDiagnostics fan-out: clientA received=%v, clientB received=%v", gotA, gotB)
+		}
 	}
 }
 
