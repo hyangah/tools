@@ -27,7 +27,7 @@ gopls -remote=auto cli def NewSession --in session.go
 # Option B — long-lived daemon on a known socket:
 gopls serve -listen "unix;/tmp/gopls.sock" -session.pool &
 gopls -remote="unix;/tmp/gopls.sock" cli def NewSession --in session.go
-# Pooled sessions are evicted after 15 min idle (override with -session.idle).
+# Pooled sessions are evicted after 5 min idle (override with -session.idle).
 ```
 
 Every invocation starts a new CLI process that connects to the daemon,

@@ -295,7 +295,7 @@ type poolKey struct {
   the winner).
 - **Release**: `pool.release(key)` decrements reference count. When zero,
   starts an idle timer.
-- **Evict**: After the idle timeout (default 15 minutes), the session is
+- **Evict**: After the idle timeout (default 5 minutes), the session is
   shut down and removed from the pool.
 
 ### Shutdown interception
