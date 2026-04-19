@@ -98,18 +98,19 @@ type PoolEntry interface {
 	// pool entry, after the session-level invalidation has run; the
 	// callback receives the watcher's session-owned background context,
 	// the modifications, and the per-View diagnose set returned by
-	// session.DidModifyFiles. See proposal §3.1, §3.3a.
+	// session.DidModifyFiles.
 	Subscribe(onWatcherEvents func(ctx context.Context, modifications []file.Modification, viewsToDiagnose map[*cache.View][]protocol.DocumentURI)) Subscription
 
 	// HasPushSubscribers reports whether any attached connection wants
-	// push-model publishDiagnostics. Stage 3c's compute gate reads this.
+	// push-model publishDiagnostics. The push-subscriber compute gate reads
+	// this to decide whether to schedule diagnoseChangedViews.
 	HasPushSubscribers() bool
 
 	// DiagnosticCache returns the pool-shared cache of computed diagnostic
 	// results. The cache is created lazily on first call and reused across
 	// every connection attached to this pool entry, so a push pass on one
-	// connection populates results that a pull on another connection can
-	// read. See proposal §3.1.
+	// connection populates results that a pull on another connection can read.
+	// See gopls/doc/design/gopls-cli-prototype.md, "Shared diagnostic cache".
 	DiagnosticCache() *DiagnosticCache
 }
 
@@ -217,8 +218,7 @@ type server struct {
 	// does not count it as a pool-scoped push subscriber. Populated in
 	// Initialize from settings.WantsPushDiagnostics (which the client
 	// may set via initializationOptions). Defaults true so omission
-	// preserves IDE behavior; CLI profiles pass false to opt out. See
-	// proposal §3.1, §4.
+	// preserves IDE behavior; CLI profiles pass false to opt out.
 	wantsPushDiagnostics bool
 
 	// changedFiles tracks files for which there has been a textDocument/didChange.

@@ -81,7 +81,7 @@ func (s *server) Diagnostic(ctx context.Context, params *protocol.DocumentDiagno
 // Diagnostic uses, so a second concurrent workspace pull (or a per-file
 // pull on the same snapshot) reuses the work.
 //
-// Stage 3e ships the minimum-correct shape:
+// Current scope:
 //   - Returns the entire result in WorkspaceDiagnosticReport.Items;
 //     partial-result streaming via WorkspaceDiagnosticReportPartialResult
 //     is allowed by the spec but optional, and CLI clients don't request
@@ -100,8 +100,9 @@ func (s *server) Diagnostic(ctx context.Context, params *protocol.DocumentDiagno
 // type-check and analysis. Snapshot-level memoization absorbs most of
 // the cost (PackageDiagnostics and analysis results are cached on the
 // snapshot), so the real waste is the cache-miss overhead per file.
-// See proposal §3.4 for the long-term shape (workspace-wide compute
-// pass that fills cache for every package's URIs in one go).
+// See gopls/doc/design/gopls-cli-prototype.md, "Follow-up work" for the
+// long-term shape (workspace-wide compute pass that fills cache for
+// every package's URIs in one go).
 func (s *server) DiagnosticWorkspace(ctx context.Context, params *protocol.WorkspaceDiagnosticParams) (*protocol.WorkspaceDiagnosticReport, error) {
 	ctx, done := event.Start(ctx, "server.DiagnosticWorkspace")
 	defer done()
@@ -180,7 +181,6 @@ func (s *server) DiagnosticWorkspace(ctx context.Context, params *protocol.Works
 // (type-check + analysis) and the result is stored with final=true. A
 // later workspace-wide push pass may overwrite with widest-package
 // results — also final, also a superset — without violating freshness.
-// See proposal §3.1.
 func (s *server) pullDiagnostics(ctx context.Context, snapshot *cache.Snapshot, fh file.Handle, uri protocol.DocumentURI) ([]*cache.Diagnostic, error) {
 	store := s.diagStore()
 	if cur, ok := store.get(uri, snapshot.View()); ok && cur.final &&
@@ -201,11 +201,10 @@ func (s *server) pullDiagnostics(ctx context.Context, snapshot *cache.Snapshot, 
 }
 
 // fileDiagnostics holds the per-connection state of published diagnostics
-// for a file. Compute results (the byView map prior to Stage 3d) live on
-// the pool-scoped DiagnosticCache so that multiple connections attached to
-// the same pooled session share them; only the publish-bookkeeping fields
-// remain here, since they describe what this server has sent on its own
-// client wire.
+// for a file. Compute results live on the pool-scoped DiagnosticCache so
+// that multiple connections attached to the same pooled session share them;
+// only the publish-bookkeeping fields remain here, since they describe what
+// this server has sent on its own client wire.
 type fileDiagnostics struct {
 	publishedHash file.Hash // hash of the last set of diagnostics published for this URI
 	mustPublish   bool      // if set, publish diagnostics even if they haven't changed
@@ -235,16 +234,15 @@ type viewDiagnostics struct {
 // DiagnosticCache is a pool-scoped store of computed diagnostic results,
 // shared across *server connections attached to the same pooled session.
 //
-// Stage 3d moves the per-file byView map (compute results) out of *server's
-// per-connection fileDiagnostics into this cache. The publish state —
-// publishedHash, mustPublish, orphanedAt — remains per-connection.
+// The per-file byView compute results live here rather than in the
+// per-connection fileDiagnostics. The publish state — publishedHash,
+// mustPublish, orphanedAt — remains per-connection.
 //
 // Push (s.diagnose, workspace-wide, widest-package analysis) and pull
 // (golang.DiagnoseFile, single-URI, narrowest-package) both fill the same
 // entries; pull therefore reads widest-package results when push got there
-// first. This is the proposal's "second cli check served from cache" mode.
-//
-// See kb-gopls-skills/v4/CAPABILITY_DRIVEN_PROPOSAL.md §3.1.
+// first. See gopls/doc/design/gopls-cli-prototype.md, "Shared diagnostic
+// cache".
 type DiagnosticCache struct {
 	mu    sync.Mutex
 	byURI map[protocol.DocumentURI]map[*cache.View]viewDiagnostics
@@ -259,8 +257,8 @@ func NewDiagnosticCache() *DiagnosticCache {
 
 // store records vd under (uri, view) if vd is fresher than what's there:
 // either no existing entry, an entry from an older snapshot, or the same
-// snapshot when vd.final is true. This mirrors the pre-Stage-3d ordering
-// rule from updateAndPublish (see https://github.com/golang/go/issues/64765).
+// snapshot when vd.final is true. Freshness ordering matches the rule in
+// updateAndPublish (see https://github.com/golang/go/issues/64765).
 func (c *DiagnosticCache) store(uri protocol.DocumentURI, view *cache.View, vd viewDiagnostics) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1124,7 +1122,7 @@ func (s *server) publishFileDiagnosticsLocked(ctx context.Context, views viewSet
 	// connection opt out of receiving server-initiated publishDiagnostics
 	// notifications entirely; when false we also skip the hash/mustPublish
 	// bookkeeping so the per-connection dedup state mirrors what the client
-	// has actually received (nothing). See proposal §3.1.
+	// has actually received (nothing).
 	if s.wantsPushDiagnostics && (hash != f.publishedHash || f.mustPublish) {
 		if err := s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 			Diagnostics: cache.ToProtocolDiagnostics(unique...),

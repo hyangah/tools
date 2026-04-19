@@ -843,7 +843,8 @@ type InternalOptions struct {
 	// render diagnostics passes false to suppress push and to opt out of
 	// being counted as a pool-scoped push subscriber, which in turn lets a
 	// pooled session skip the modification-triggered diagnose pass when no
-	// other connection wants push. See proposal §3.1, §4.
+	// other connection wants push. See
+	// gopls/doc/design/gopls-cli-prototype.md, "Push-subscriber gate".
 	//
 	// Defaults true so omission preserves IDE behavior.
 	WantsPushDiagnostics bool

@@ -342,7 +342,7 @@ func codeActionsForDiagnostic(ctx context.Context, snapshot *cache.Snapshot, sd 
 }
 
 func (s *server) findMatchingDiagnostics(uri protocol.DocumentURI, pd protocol.Diagnostic) []*cache.Diagnostic {
-	// Compute results live on the pool-shared DiagnosticCache (Stage 3d);
+	// Compute results live on the pool-shared DiagnosticCache;
 	// the cache provides its own locking, so no s.diagnosticsMu is needed.
 	var sds []*cache.Diagnostic
 	for _, viewDiags := range s.diagStore().matchingDiagnostics(uri) {

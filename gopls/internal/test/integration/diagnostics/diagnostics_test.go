@@ -159,9 +159,9 @@ func TestDiagnosticClearingOnEdit(t *testing.T) {
 	})
 }
 
-// TestWorkspacePullDiagnostics exercises Stage 3e: workspace/diagnostic
-// returns reports for every Go file in the workspace, including ones the
-// editor has never opened. This is the request `cli check ./...` will use
+// TestWorkspacePullDiagnostics exercises the workspace/diagnostic LSP request:
+// it must return reports for every Go file in the workspace, including ones
+// the editor has never opened. This is the request `cli check ./...` uses
 // to avoid N round-trips of per-file pull.
 func TestWorkspacePullDiagnostics(t *testing.T) {
 	const ws = `

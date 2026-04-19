@@ -14,7 +14,8 @@ import (
 // initParams shapes the resulting ParamInitialize: the CLI profile
 // drops WorkDoneProgress and advertises wantsPushDiagnostics=false via
 // initializationOptions (the wire used by the server to populate
-// s.wantsPushDiagnostics — see proposal §3.1, §4).
+// s.wantsPushDiagnostics). See gopls/doc/design/gopls-cli-prototype.md,
+// "CLI capability profile".
 func TestInitParamsProfile(t *testing.T) {
 	opts := settings.DefaultOptions()
 
@@ -89,7 +90,7 @@ func TestCLIProfileFor(t *testing.T) {
 // flips.
 func TestCLIProfileSkipsDidOpen(t *testing.T) {
 	if !cliClientProfile.skipDidOpen {
-		t.Error("cliClientProfile.skipDidOpen = false, want true (Stage 4b)")
+		t.Error("cliClientProfile.skipDidOpen = false, want true")
 	}
 	if defaultClientProfile.skipDidOpen {
 		t.Error("defaultClientProfile.skipDidOpen = true, want false")

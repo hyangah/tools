@@ -52,8 +52,8 @@ type sessionPool struct {
 // not lost — and then fans the events out to per-connection subscribers
 // installed via Subscribe. The closure does not capture any *server
 // directly; subscribers come and go via Subscription.Close. See
-// kb-gopls-skills/v4/CAPABILITY_DRIVEN_PROPOSAL.md §3.3a/§3.3b and
-// kb-gopls-skills/v4/research/FILE_WATCHER_AUDIT.md.
+// gopls/doc/design/gopls-cli-prototype.md, "Pool-scoped watcher" and
+// "Push-diagnostic fan-out".
 type pooledSession struct {
 	session   *cache.Session
 	refCount  int
@@ -69,8 +69,8 @@ type pooledSession struct {
 	// push-model publishDiagnostics installs a callback via Subscribe;
 	// the pool's onChange (set up below) fans watcher events out to all
 	// installed callbacks after invalidating the session. The
-	// HasPushSubscribers gate (Stage 3c) reads len(subscribers).
-	// See proposal §3.1, §3.3a.
+	// HasPushSubscribers gate (shouldComputeDiagnostics) reads
+	// len(subscribers).
 	subsMu      sync.Mutex
 	subsNextID  uint64
 	subscribers map[uint64]watcherCallback
@@ -114,7 +114,7 @@ func (sub *poolSubscription) Close() {
 // modifications + per-View viewsToDiagnose to every subscriber installed
 // via Subscribe. The pool's background context (created here, cancelled
 // on closeWatcher) is used for both calls so events outlive any one
-// addFolders request. See proposal §3.3a/§3.3b.
+// addFolders request.
 func (ps *pooledSession) EnsureWatcher(ctx context.Context, mode settings.FileWatcherMode, onError func(error)) error {
 	ps.watcherMu.Lock()
 	defer ps.watcherMu.Unlock()
@@ -186,7 +186,7 @@ func (ps *pooledSession) Poke() {
 // Subscribe implements server.PoolEntry. It registers cb to be invoked
 // from the pool's shared watcher after session.DidModifyFiles for any
 // disk events on this pool entry, and counts the subscription toward
-// HasPushSubscribers (Stage 3c's compute gate). The returned
+// HasPushSubscribers (the push-subscriber compute gate). The returned
 // Subscription must be Closed exactly once on connection shutdown.
 func (ps *pooledSession) Subscribe(cb watcherCallback) server.Subscription {
 	ps.subsMu.Lock()

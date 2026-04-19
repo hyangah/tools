@@ -343,9 +343,9 @@ func caller() {
 
 // TestCLICheck exercises `gopls cli check` in both workspace-pull form
 // (no args, calls workspace/diagnostic) and per-file pull form (args,
-// calls textDocument/diagnostic). Pins the Stage 5a pull-diagnostic
-// plumbing end-to-end: if wantsPullDiagnostics doesn't thread through,
-// the server won't advertise diagnosticProvider and this will fail.
+// calls textDocument/diagnostic). Pins the pull-diagnostic plumbing
+// end-to-end: if wantsPullDiagnostics doesn't thread through, the server
+// won't advertise diagnosticProvider and this will fail.
 func TestCLICheck(t *testing.T) {
 	t.Parallel()
 	tree := writeTree(t, `

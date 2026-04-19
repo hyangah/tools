@@ -76,7 +76,7 @@ func (s *server) Initialize(ctx context.Context, params *protocol.ParamInitializ
 	// resolved options. The subscribe gate in addFolders consults this
 	// field; setting it before addFolders runs ensures a CLI profile
 	// declaring WantsPushDiagnostics=false opts out of the pool
-	// subscription cleanly. See proposal §3.1, §4.
+	// subscription cleanly.
 	s.wantsPushDiagnostics = options.WantsPushDiagnostics
 
 	if options.MaxFileCacheBytes > 0 {
@@ -122,7 +122,7 @@ func (s *server) Initialize(ctx context.Context, params *protocol.ParamInitializ
 		diagnosticProvider = &protocol.Or_ServerCapabilities_diagnosticProvider{
 			Value: protocol.DiagnosticOptions{
 				InterFileDependencies: true,
-				WorkspaceDiagnostics:  true, // Stage 3e: workspace/diagnostic implemented.
+				WorkspaceDiagnostics:  true, // workspace/diagnostic implemented (LSP 3.17).
 			},
 		}
 	}
@@ -428,7 +428,7 @@ func (s *server) addFolders(ctx context.Context, folders []protocol.WorkspaceFol
 	// folder creation on unknown-URI DidOpen); the poolSubscription==nil
 	// guard prevents leaking subscriptions. Only subscribe when this
 	// connection wants push diagnostics; the CLI profile opts out by
-	// declaring wantsPushDiagnostics=false. See proposal §3.1, §3.3a.
+	// declaring wantsPushDiagnostics=false.
 	if s.poolEntry != nil && s.poolSubscription == nil && s.wantsPushDiagnostics {
 		s.poolSubscription = s.poolEntry.Subscribe(s.onPoolWatcherEvents)
 	}
@@ -503,8 +503,7 @@ func (s *server) updateWatchedDirectories(ctx context.Context) error {
 // the watcher lives on the pool entry so it survives across connection
 // shutdowns and correctly invalidates the shared session when disk content
 // changes in the gap between connections. See
-// kb-gopls-skills/v4/CAPABILITY_DRIVEN_PROPOSAL.md §3.3b for design rationale
-// and research/FILE_WATCHER_AUDIT.md for the bug this closes.
+// gopls/doc/design/gopls-cli-prototype.md, "Pool-scoped watcher".
 //
 // When not pooled, the watcher remains local to *server. TODO: when
 // EnableSessionPool becomes the default across gopls deployments, the
@@ -524,7 +523,7 @@ func (s *server) updateServerSideWatcher(ctx context.Context, patterns map[proto
 		// attached to the same pooled session and fully owned by the pool
 		// entry — onChange (which invalidates the session and fans out to
 		// subscribers) lives in pool.go, so events continue to flow even
-		// after this *server shuts down. See proposal §3.3a/§3.3b.
+		// after this *server shuts down.
 		watcherCtx := xcontext.Detach(ctx)
 		onErr := func(err error) {
 			event.Error(watcherCtx, "pool file watcher error", err)

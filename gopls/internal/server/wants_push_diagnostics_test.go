@@ -18,7 +18,6 @@ import (
 // TestInitializeWantsPushDiagnostics asserts that the wantsPushDiagnostics
 // key in initializationOptions is read during Initialize and reflected on
 // the *server field that gates pool subscription and push publication.
-// See proposal §3.1, §4.
 func TestInitializeWantsPushDiagnostics(t *testing.T) {
 	// Create an empty module on disk so Initialize has a real RootURI.
 	tmp := t.TempDir()

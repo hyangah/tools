@@ -63,10 +63,9 @@ type clientProfile struct {
 	// skipDidOpen, when true, tells subcommand dispatch to bypass the
 	// cliServer wrapper that normally sends textDocument/didOpen before
 	// each query. CLI clients have no unsaved buffers: disk is
-	// authoritative, and with Stage 1's session-scoped watcher the
-	// pooled snapshot tracks disk across connections without DidOpen
-	// priming. See proposal §4 and the 2026-04-18 investigation note in
-	// gopls/CLAUDE.md.
+	// authoritative, and the pool-scoped watcher keeps the pooled
+	// snapshot current across connections without DidOpen priming. See
+	// gopls/doc/design/gopls-cli-prototype.md, "CLI capability profile".
 	skipDidOpen bool
 
 	// wantsPullDiagnostics advertises textDocument/diagnostic and
@@ -75,14 +74,13 @@ type clientProfile struct {
 	// settings.Options.PullDiagnostics via initializationOptions so the
 	// server advertises diagnosticProvider in return. Used by the
 	// diagnostic-consuming `gopls cli` subcommands (check, vet, codeaction,
-	// fix). See proposal §2.
+	// fix). See gopls/doc/design/gopls-cli-prototype.md, "Pull diagnostics".
 	wantsPullDiagnostics bool
 }
 
 // defaultClientProfile is the capability profile used by legacy
 // subcommands (definition, references, check, …) and anything that does
-// not explicitly opt into a different profile. It matches pre-Stage-4
-// behavior.
+// not explicitly opt into a different profile.
 var defaultClientProfile = clientProfile{
 	wantsPushDiagnostics: true,
 	workDoneProgress:     true,

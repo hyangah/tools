@@ -221,18 +221,18 @@ func (s *server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 // shouldComputeDiagnostics reports whether the modification-triggered
 // diagnose goroutine should run. The answer is no only when pooling is
 // enabled and no attached connection wants push-model publishDiagnostics;
-// in that case Stage 3d's pull path (or a future attach) drives any
-// compute that's actually needed.
+// in that case the pull path (or a future attach) drives any compute
+// that's actually needed.
 //
 // Non-pooled servers always compute — the current connection is the only
 // sink for publishDiagnostics, and skipping compute would silently drop
-// the IDE use case. See proposal §3.1.
+// the IDE use case.
 //
 // The read is intentionally unsynchronized. A subscriber count change
 // racing a modification is safe either way: we either compute-and-publish
 // to a subscriber that's about to detach (benign — the publish is dropped
 // at pipe close), or skip-and-don't-publish to a subscriber that just
-// attached (the next modification, or Stage 3d's pull, settles it).
+// attached (the next modification, or a pull request, settles it).
 func (s *server) shouldComputeDiagnostics() bool {
 	if s.poolEntry == nil {
 		return true
@@ -242,13 +242,12 @@ func (s *server) shouldComputeDiagnostics() bool {
 
 // onPoolWatcherEvents is the callback the pool entry invokes from the
 // shared file watcher after session.DidModifyFiles has invalidated the
-// session-level snapshot for the disk events. It performs the *server-side
-// half (Stage 1's accepted regression): mark URIs as needing republish,
-// then kick a per-server diagnose+publish goroutine if the connection is
-// still subscribed to push diagnostics. Compute results land in the
-// pool-shared DiagnosticCache, so concurrent fan-outs to N IDE
-// subscribers cooperate naturally — only the first triggers analysis,
-// the rest publish from cache. See proposal §3.3a.
+// session-level snapshot for the disk events. It marks URIs as needing
+// republish, then kicks a per-server diagnose+publish goroutine if the
+// connection is still subscribed to push diagnostics. Compute results
+// land in the pool-shared DiagnosticCache, so concurrent fan-outs to N
+// IDE subscribers cooperate naturally — only the first triggers analysis,
+// the rest publish from cache.
 //
 // ctx is the watcher's session-owned background context (created in
 // updateServerSideWatcher and detached from the addFolders request); the
@@ -328,8 +327,8 @@ func (s *server) didModifyFiles(ctx context.Context, modifications []file.Modifi
 
 	// Compute gate: skip the workspace diagnostic pass when no attached
 	// connection wants push-model publishDiagnostics. Pull handlers
-	// (Stage 3d) drive compute inline on demand instead. See proposal
-	// §3.1.
+	// drive compute inline on demand instead. See
+	// gopls/doc/design/gopls-cli-prototype.md, "Push-subscriber gate".
 	if s.shouldComputeDiagnostics() {
 		modCtx, modID := s.needsDiagnosis(ctx, viewsToDiagnose)
 		wg.Go(func() {
