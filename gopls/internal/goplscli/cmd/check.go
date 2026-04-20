@@ -10,6 +10,7 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/gopls/internal/settings"
@@ -34,7 +35,11 @@ type cliDiagnostic struct {
 // per file. Both require the pull-diagnostic profile (see
 // cliProfileFor in internal/cmd/cmd.go).
 func runCheck(ctx context.Context, server protocol.Server, args []string) ([]cliDiagnostic, error) {
-	return runDiagnostics(ctx, server, args, nil)
+	files, severity, err := parseDiagnosticFlags(args)
+	if err != nil {
+		return nil, err
+	}
+	return runDiagnostics(ctx, server, files, nil, severity)
 }
 
 // runVet implements `gopls cli vet [FILE...]`. Same shape as check, but
@@ -42,12 +47,58 @@ func runCheck(ctx context.Context, server protocol.Server, args []string) ([]cli
 // suite (see settings.VetAnalyzerNames). Diagnostic.Source equals the
 // analyzer name, so the set-membership check is exact.
 func runVet(ctx context.Context, server protocol.Server, args []string) ([]cliDiagnostic, error) {
-	return runDiagnostics(ctx, server, args, settings.VetAnalyzerNames())
+	files, severity, err := parseDiagnosticFlags(args)
+	if err != nil {
+		return nil, err
+	}
+	return runDiagnostics(ctx, server, files, settings.VetAnalyzerNames(), severity)
+}
+
+// parseDiagnosticFlags splits args into positional files and an optional
+// --severity= cutoff. Severity 0 means no filtering.
+func parseDiagnosticFlags(args []string) (files []string, severity protocol.DiagnosticSeverity, err error) {
+	for _, a := range args {
+		v, ok := strings.CutPrefix(a, "--severity=")
+		if !ok {
+			v, ok = strings.CutPrefix(a, "-severity=")
+		}
+		if ok {
+			severity, err = severityFromName(v)
+			if err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			return nil, 0, fmt.Errorf("unknown flag %q", a)
+		}
+		files = append(files, a)
+	}
+	return files, severity, nil
+}
+
+// severityFromName maps a severity name (case-insensitive) to its LSP
+// numeric value. Lower numbers are more severe.
+func severityFromName(name string) (protocol.DiagnosticSeverity, error) {
+	switch strings.ToLower(name) {
+	case "error":
+		return protocol.SeverityError, nil
+	case "warning":
+		return protocol.SeverityWarning, nil
+	case "info", "information":
+		return protocol.SeverityInformation, nil
+	case "hint":
+		return protocol.SeverityHint, nil
+	default:
+		return 0, fmt.Errorf("unknown severity %q (want error, warning, info, or hint)", name)
+	}
 }
 
 // runDiagnostics is the shared core used by check and vet. sourceFilter,
 // if non-nil, restricts results to diagnostics whose Source matches.
-func runDiagnostics(ctx context.Context, server protocol.Server, args []string, sourceFilter map[string]bool) ([]cliDiagnostic, error) {
+// minSeverity, if non-zero, drops diagnostics with severity numerically
+// greater than minSeverity (i.e., less severe).
+func runDiagnostics(ctx context.Context, server protocol.Server, args []string, sourceFilter map[string]bool, minSeverity protocol.DiagnosticSeverity) ([]cliDiagnostic, error) {
 	var diags []cliDiagnostic
 
 	if len(args) == 0 {
@@ -81,6 +132,17 @@ func runDiagnostics(ctx context.Context, server protocol.Server, args []string, 
 			}
 			diags = append(diags, toCLIDiagnostics(uri, full.Items, sourceFilter)...)
 		}
+	}
+
+	if minSeverity != 0 {
+		filtered := diags[:0]
+		for _, d := range diags {
+			sev, _ := severityFromName(d.Severity)
+			if sev != 0 && sev <= minSeverity {
+				filtered = append(filtered, d)
+			}
+		}
+		diags = filtered
 	}
 
 	sort.Slice(diags, func(i, j int) bool {

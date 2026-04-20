@@ -697,3 +697,41 @@ func Bad() {
 		})
 	}
 }
+
+// TestCLICheckSeverity exercises `gopls cli check` with the --severity flag,
+// verifying that only diagnostics at or above the specified severity level
+// are included (note: lower severity value = higher severity, so error=1,
+// warning=2, info=3, hint=4).
+func TestCLICheckSeverity(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+func Foo() int {
+	var x int
+	return x + undefined
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			// Without --severity flag, should see all diagnostics.
+			res := runCLI(t, tree, mode, "check", "./a.go")
+			res.checkExit(true)
+			res.checkStdout(`a\.go:`)
+			res.checkStdout(`undefined`)
+
+			// With --severity=error, should only include errors.
+			// Since the "undefined" error is a compilation error (severity=error),
+			// it should still appear.
+			res = runCLI(t, tree, mode, "check", "--severity=error", "./a.go")
+			res.checkExit(true)
+			res.checkStdout(`a\.go:`)
+			res.checkStdout(`undefined`)
+		})
+	}
+}
