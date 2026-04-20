@@ -222,6 +222,69 @@ func (T) String() string { return "" }
 	}
 }
 
+// TestCLIRefsContext tests `gopls cli refs --context=N`.
+func TestCLIRefsContext(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+func Foo() {}
+
+func bar() {
+	Foo()
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "refs", "--context=1", "Foo", "--in", "a.go")
+			res.checkExit(true)
+			// Location headers must appear.
+			res.checkStdout(`a\.go:3:6`)
+			res.checkStdout(`a\.go:6:2`)
+			// Context surrounding the declaration.
+			res.checkStdout(`func Foo\(\)`)
+			// Context surrounding the call site.
+			res.checkStdout(`Foo\(\)`)
+		})
+	}
+}
+
+// TestCLIImplContext tests `gopls cli impl --context=N`.
+func TestCLIImplContext(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+type Stringer interface {
+	String() string
+}
+
+type T struct{}
+
+func (T) String() string { return "" }
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "impl", "--context=1", "Stringer", "--in", "a.go")
+			res.checkExit(true)
+			// Location header must appear.
+			res.checkStdout(`a\.go:`)
+			// Context lines surrounding the implementation (T's type decl at line 7).
+			res.checkStdout(`type T struct`)
+		})
+	}
+}
+
 // TestCLIHover tests `gopls cli hover`.
 func TestCLIHover(t *testing.T) {
 	t.Parallel()

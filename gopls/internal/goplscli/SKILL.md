@@ -42,8 +42,10 @@ warm across invocations — the first query after daemon start is slow
 ```sh
 gopls -remote=auto cli def  SYMBOL --in FILE           # go to definition
 gopls -remote=auto cli refs SYMBOL --in FILE           # find all references
+gopls -remote=auto cli refs SYMBOL --in FILE --context=3  # references with 3 lines of surrounding source
 gopls -remote=auto cli hover SYMBOL --in FILE          # signature + docs
 gopls -remote=auto cli impl SYMBOL --in FILE           # find implementations
+gopls -remote=auto cli impl SYMBOL --in FILE --context=3  # implementations with surrounding source
 gopls -remote=auto cli rename SYMBOL --in FILE --to NEWNAME
 ```
 
@@ -184,6 +186,21 @@ Terse text, one result per line. Example — `def NewSession --in session.go`:
 
 ```
 /path/to/session.go:39:6
+```
+
+With `--context=N` (on `refs` and `impl`), each location is followed by
+N lines before + match line + N lines after. Blank line between matches:
+
+```
+/path/to/session.go:39:6
+	c := cache.New(nil)
+	sess := cache.NewSession(ctx, c)
+	options := settings.DefaultOptions(nil)
+
+/path/to/server.go:112:15
+	svr := server.New(sess, benchClient{}, options)
+	sess.SetOptions(options)
+	return svr
 ```
 
 Example — `hover NewSession --in session.go`:

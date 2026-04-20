@@ -82,11 +82,11 @@ func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []st
 	case "def":
 		result, err = runDef(ctx, server, subArgs)
 	case "refs":
-		result, err = runLocationCommand(ctx, server, "textDocument/references", subArgs)
+		result, err = runWithContext(ctx, server, "textDocument/references", subArgs)
 	case "hover":
 		result, err = runHover(ctx, server, subArgs)
 	case "impl":
-		result, err = runLocationCommand(ctx, server, "textDocument/implementation", subArgs)
+		result, err = runWithContext(ctx, server, "textDocument/implementation", subArgs)
 	case "symbols":
 		result, err = runSymbols(ctx, server, subArgs)
 	case "wsymbols":
@@ -195,6 +195,76 @@ func resolvePosition(ctx context.Context, server protocol.Server, args []string)
 		Position:     rng.Start,
 		Range:        rng,
 	}, nil
+}
+
+// locWithContext extends CLILocation with optional surrounding source lines.
+type locWithContext struct {
+	goplscli.CLILocation
+	Context string `json:"context,omitempty"`
+}
+
+// parseContextFlag extracts --context=N or -context=N from args.
+// Returns n (0 if absent), remaining args, and any parse error.
+func parseContextFlag(args []string) (n int, rest []string, err error) {
+	for _, a := range args {
+		if v, ok := strings.CutPrefix(a, "--context="); ok {
+			n, err = strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return 0, nil, fmt.Errorf("--context requires a non-negative integer, got %q", v)
+			}
+		} else if v, ok := strings.CutPrefix(a, "-context="); ok {
+			n, err = strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return 0, nil, fmt.Errorf("-context requires a non-negative integer, got %q", v)
+			}
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	return n, rest, nil
+}
+
+// extractContextLines returns n lines before and n lines after matchLine (1-based)
+// from the named file, joined with "\n".
+func extractContextLines(path string, matchLine, n int) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
+	first := max(0, matchLine-1-n)
+	last := min(len(lines)-1, matchLine-1+n)
+	return strings.Join(lines[first:last+1], "\n"), nil
+}
+
+// attachLocationContext reads source files and attaches n lines of surrounding
+// context (n before + match + n after) to each location. Context is empty when n == 0.
+func attachLocationContext(locs []goplscli.CLILocation, n int) []locWithContext {
+	results := make([]locWithContext, len(locs))
+	for i, loc := range locs {
+		results[i].CLILocation = loc
+		if n > 0 {
+			ctx, err := extractContextLines(loc.File, loc.Start.Line, n)
+			if err != nil {
+				continue // best-effort; leave context empty on I/O error
+			}
+			results[i].Context = ctx
+		}
+	}
+	return results
+}
+
+// runWithContext runs a location query and optionally attaches surrounding source lines.
+func runWithContext(ctx context.Context, server protocol.Server, method string, args []string) ([]locWithContext, error) {
+	n, posArgs, err := parseContextFlag(args)
+	if err != nil {
+		return nil, err
+	}
+	locs, err := runLocationCommand(ctx, server, method, posArgs)
+	if err != nil {
+		return nil, err
+	}
+	return attachLocationContext(locs, n), nil
 }
 
 // runLocationCommand runs definition, references, or implementation.
@@ -391,9 +461,15 @@ func printText(w io.Writer, sub string, result any) {
 			}
 		}
 	case "refs", "impl":
-		locs := result.([]goplscli.CLILocation)
-		for _, loc := range locs {
+		locs := result.([]locWithContext)
+		for i, loc := range locs {
 			fmt.Fprintf(w, "%s:%d:%d\n", loc.File, loc.Start.Line, loc.Start.Column)
+			if loc.Context != "" {
+				fmt.Fprintln(w, loc.Context)
+				if i < len(locs)-1 {
+					fmt.Fprintln(w) // blank line between matches
+				}
+			}
 		}
 	case "hover":
 		h := result.(*hoverResult)

@@ -32,9 +32,9 @@ Supports symbol-based lookup and terse output for AI agents.
 
 Commands:
   def       Find definition (FILE:LINE:COL or SYMBOL --in FILE)
-  refs      Find references
+  refs      Find references [--context=N]
   hover     Show type and documentation
-  impl      Find implementations
+  impl      Find implementations [--context=N]
   symbols   List symbols in a file
   wsymbols  Search workspace symbols
   rename    Rename a symbol (FILE:LINE:COL --to NEWNAME)
