@@ -80,7 +80,7 @@ func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []st
 
 	switch sub {
 	case "def":
-		result, err = runLocationCommand(ctx, server, "textDocument/definition", subArgs)
+		result, err = runDef(ctx, server, subArgs)
 	case "refs":
 		result, err = runLocationCommand(ctx, server, "textDocument/references", subArgs)
 	case "hover":
@@ -232,9 +232,77 @@ func runLocationCommand(ctx context.Context, server protocol.Server, method stri
 	return result, nil
 }
 
+// defResult extends CLILocation with an optional Body field for --body output.
+type defResult struct {
+	goplscli.CLILocation
+	Body string `json:"body,omitempty"`
+}
+
+// parseBodyFlag extracts the --body / -body flag from args.
+// It returns the flag value and the remaining args with the flag removed.
+func parseBodyFlag(args []string) (bool, []string) {
+	var body bool
+	var rest []string
+	for _, a := range args {
+		switch a {
+		case "--body", "-body":
+			body = true
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return body, rest
+}
+
+// runDef implements `gopls cli def [--body] FILE:LINE:COL` or
+// `gopls cli def [--body] SYMBOL --in FILE`.
+// With --body, each result also includes the declaration source text.
+func runDef(ctx context.Context, server protocol.Server, args []string) (any, error) {
+	withBody, posArgs := parseBodyFlag(args)
+
+	locs, err := runLocationCommand(ctx, server, "textDocument/definition", posArgs)
+	if err != nil {
+		return nil, err
+	}
+
+	if !withBody {
+		return locs, nil
+	}
+
+	results := make([]defResult, len(locs))
+	for i, loc := range locs {
+		results[i].CLILocation = loc
+		// Re-construct a protocol.Location to pass to fetchDeclBody.
+		protoLoc := protocol.Location{
+			URI: protocol.URIFromPath(loc.File),
+			Range: protocol.Range{
+				Start: protocol.Position{
+					Line:      uint32(loc.Start.Line - 1),
+					Character: uint32(loc.Start.Column - 1),
+				},
+				End: protocol.Position{
+					Line:      uint32(loc.End.Line - 1),
+					Character: uint32(loc.End.Column - 1),
+				},
+			},
+		}
+		body, err := fetchDeclBody(ctx, server, protoLoc)
+		if err != nil {
+			// Best-effort: log and continue with empty body.
+			fmt.Fprintf(os.Stderr, "warning: fetchDeclBody: %v\n", err)
+		}
+		results[i].Body = body
+	}
+	return results, nil
+}
+
 // runHover runs textDocument/hover.
+// With --body in args, it also fetches the declaration source via
+// textDocument/definition and populates hoverResult.Body.
 func runHover(ctx context.Context, server protocol.Server, args []string) (*hoverResult, error) {
-	tdpp, err := resolvePosition(ctx, server, args)
+	withBody, posArgs := parseBodyFlag(args)
+
+	tdpp, err := resolvePosition(ctx, server, posArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -247,11 +315,31 @@ func runHover(ctx context.Context, server protocol.Server, args []string) (*hove
 	if hover == nil {
 		return nil, fmt.Errorf("no hover information at this position")
 	}
-	return &hoverResult{Content: hover.Contents.Value}, nil
+
+	res := &hoverResult{Content: hover.Contents.Value}
+
+	if withBody {
+		defs, err := server.Definition(ctx, &protocol.DefinitionParams{
+			TextDocumentPositionParams: tdpp,
+		})
+		if err != nil {
+			// Best-effort: log and continue with empty body.
+			fmt.Fprintf(os.Stderr, "warning: definition for body: %v\n", err)
+		} else if len(defs) > 0 {
+			body, err := fetchDeclBody(ctx, server, defs[0])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: fetchDeclBody: %v\n", err)
+			}
+			res.Body = body
+		}
+	}
+
+	return res, nil
 }
 
 type hoverResult struct {
 	Content string `json:"content"`
+	Body    string `json:"body,omitempty"`
 }
 
 // runSymbols runs textDocument/documentSymbol.
@@ -286,7 +374,23 @@ func runWSymbols(ctx context.Context, server protocol.Server, args []string) ([]
 // printText prints the result in human-readable text format.
 func printText(w io.Writer, sub string, result any) {
 	switch sub {
-	case "def", "refs", "impl":
+	case "def":
+		switch v := result.(type) {
+		case []defResult:
+			for _, r := range v {
+				fmt.Fprintf(w, "%s:%d:%d\n", r.File, r.Start.Line, r.Start.Column)
+				if r.Body != "" {
+					fmt.Fprintln(w, "---")
+					fmt.Fprintln(w, r.Body)
+					fmt.Fprintln(w)
+				}
+			}
+		case []goplscli.CLILocation:
+			for _, loc := range v {
+				fmt.Fprintf(w, "%s:%d:%d\n", loc.File, loc.Start.Line, loc.Start.Column)
+			}
+		}
+	case "refs", "impl":
 		locs := result.([]goplscli.CLILocation)
 		for _, loc := range locs {
 			fmt.Fprintf(w, "%s:%d:%d\n", loc.File, loc.Start.Line, loc.Start.Column)
@@ -294,6 +398,10 @@ func printText(w io.Writer, sub string, result any) {
 	case "hover":
 		h := result.(*hoverResult)
 		fmt.Fprintln(w, h.Content)
+		if h.Body != "" {
+			fmt.Fprintln(w, "--- body ---")
+			fmt.Fprintln(w, h.Body)
+		}
 	case "symbols":
 		symbols := result.([]protocol.DocumentSymbol)
 		for _, s := range symbols {

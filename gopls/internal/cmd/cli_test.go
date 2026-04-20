@@ -747,6 +747,72 @@ func Bad() {
 	}
 }
 
+// TestCLIDefBody tests `gopls cli def --body`, verifying that the output
+// includes both the location line and the declaration source body.
+func TestCLIDefBody(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+func Foo() int {
+	return 42
+}
+
+func bar() {
+	Foo()
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			// SYMBOL --in FILE form with --body
+			res := runCLI(t, tree, mode, "def", "Foo", "--in", "a.go", "--body")
+			res.checkExit(true)
+			// Location line
+			res.checkStdout(`a\.go:3:6`)
+			// Separator and body content
+			res.checkStdout(`---`)
+			res.checkStdout(`func Foo\(\) int`)
+			res.checkStdout(`return 42`)
+		})
+	}
+}
+
+// TestCLIHoverBody tests `gopls cli hover --body`, verifying that the output
+// includes the hover content, the body separator, and the declaration source.
+func TestCLIHoverBody(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- a.go --
+package a
+
+// Foo does foo.
+func Foo() int {
+	return 99
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "hover", "Foo", "--in", "a.go", "--body")
+			res.checkExit(true)
+			// Hover content (signature)
+			res.checkStdout(`Foo`)
+			// Body separator
+			res.checkStdout(`--- body ---`)
+			// Body content (distinctive value)
+			res.checkStdout(`return 99`)
+		})
+	}
+}
+
 // TestCLICheckSeverity exercises `gopls cli check` with the --severity flag,
 // verifying that only diagnostics at or above the specified severity level
 // are included (note: lower severity value = higher severity, so error=1,
