@@ -22,14 +22,15 @@ import (
 // to the user. Parsed from args in runFormat; shared with runImports
 // since both subcommands return edits.
 type formatFlags struct {
-	Write bool // -w: overwrite the file in place
-	Diff  bool // -d: print a unified diff
-	List  bool // -l: print the names of files that would change
+	Write    bool // -w: overwrite the file in place
+	Preserve bool // with -write, make copies of original files
+	Diff     bool // -d: print a unified diff
+	List     bool // -l: print the names of files that would change
 }
 
 // parseFormatFlags splits args into edit-mode flags and positional file
 // arguments. Only long form is supported to keep the parser simple
-// (-write, -diff, -list, or their double-dash equivalents); the flags
+// (-write, -diff, -list, -preserve, or their double-dash equivalents); the flags
 // are orthogonal and any combination is valid.
 func parseFormatFlags(args []string) (formatFlags, []string, error) {
 	var flags formatFlags
@@ -42,6 +43,8 @@ func parseFormatFlags(args []string) (formatFlags, []string, error) {
 			flags.Diff = true
 		case "-l", "--list", "-list":
 			flags.List = true
+		case "-preserve", "--preserve":
+			flags.Preserve = true
 		default:
 			if strings.HasPrefix(a, "-") {
 				return flags, nil, fmt.Errorf("unknown flag %q", a)
@@ -167,6 +170,11 @@ func emitFormatOutput(w io.Writer, flags formatFlags, filename string, old, new 
 		fmt.Fprintln(w, filename)
 	}
 	if flags.Write && changed {
+		if flags.Preserve {
+			if err := os.WriteFile(filename+".orig", old, 0o666); err != nil {
+				return err
+			}
+		}
 		if err := os.WriteFile(filename, new, 0o666); err != nil {
 			return err
 		}

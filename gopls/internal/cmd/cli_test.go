@@ -553,6 +553,55 @@ _=x
 	}
 }
 
+// TestCLIFormatPreserve exercises `gopls cli format -w --preserve`, verifying
+// that the original file is backed up to .orig before being overwritten.
+func TestCLIFormatPreserve(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, `
+-- go.mod --
+module example.com
+go 1.18
+
+-- bad.go --
+package a
+
+func Bad( ) {
+var x int
+_=x
+}
+`)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "format", "-w", "--preserve", "./bad.go")
+			res.checkExit(true)
+
+			// Check that the original file was backed up.
+			origPath := filepath.Join(tree, "bad.go.orig")
+			if _, err := os.Stat(origPath); err != nil {
+				t.Errorf("preserve did not create backup: %v", err)
+			}
+
+			// Check that the backup contains the original content.
+			origContent, err := os.ReadFile(origPath)
+			if err != nil {
+				t.Fatalf("failed to read backup: %v", err)
+			}
+			if !bytes.Contains(origContent, []byte("Bad( )")) {
+				t.Errorf("backup content does not match original; got %q", origContent)
+			}
+
+			// Check that the formatted file was written.
+			formatted, err := os.ReadFile(filepath.Join(tree, "bad.go"))
+			if err != nil {
+				t.Fatalf("failed to read formatted file: %v", err)
+			}
+			if !bytes.Contains(formatted, []byte("Bad()")) {
+				t.Errorf("formatted content incorrect; got %q", formatted)
+			}
+		})
+	}
+}
+
 // TestCLIImports exercises `gopls cli imports`, verifying that an
 // unused import is removed. Goes through textDocument/codeAction with
 // Only=SourceOrganizeImports.
