@@ -1,6 +1,6 @@
 ---
 name: goplscli
-description: Use `gopls cli` for Go code intelligence — go-to-definition, find-references, hover, find-implementations, rename with dry-run preview, symbol search, diagnostics (check/vet), and code-action-driven edits (format/imports/codeaction/fix). Use when navigating Go code, understanding types/APIs, collecting compile/vet diagnostics, or applying single-shot edits safely. Faster and more accurate than grep for type-aware queries.
+description: Use `gopls cli` for Go code intelligence — go-to-definition, find-references, hover, find-implementations, rename (with optional dry-run), symbol search, diagnostics (check/vet, with optional severity filter), and code-action-driven edits (format/imports/codeaction/fix). Use when navigating Go code, understanding types/APIs, collecting compile/vet diagnostics, or applying single-shot edits safely. Faster and more accurate than grep for type-aware queries.
 allowed-tools: Bash(gopls *)
 ---
 
@@ -59,6 +59,14 @@ Qualified forms also work: `(*Session).Definition` or `Session.Definition`.
 Use `Type.Method` form to narrow to a specific receiver when the plain
 method name is ambiguous.
 
+Add `--body` to `def` or `hover` to include the full source of the
+declaration in the output, so you don't need a follow-up Read:
+
+```sh
+gopls -remote=auto cli def   NewSession --in session.go --body
+gopls -remote=auto cli hover NewSession --in session.go --body
+```
+
 **Navigate by position (use when you already have FILE:LINE:COL, e.g.
 parsing compiler output):**
 
@@ -84,15 +92,22 @@ gopls -remote=auto cli wsymbols QUERY       # fuzzy workspace-wide search
 **Diagnostics (compile errors, vet, analyzers):**
 
 ```sh
-gopls -remote=auto cli check                   # workspace-wide
-gopls -remote=auto cli check FILE [FILE...]    # per-file
-gopls -remote=auto cli vet [FILE...]           # filtered to the cmd/vet suite
+gopls -remote=auto cli check                          # workspace-wide
+gopls -remote=auto cli check FILE [FILE...]           # per-file
+gopls -remote=auto cli check --severity=error         # errors only
+gopls -remote=auto cli vet [FILE...]                  # filtered to the cmd/vet suite
 ```
 
 `check` returns every diagnostic gopls would surface in an editor —
 compile errors, go/analysis findings, modernizers. `vet` is the same
 pipeline filtered to the traditional `cmd/vet` analyzer set (printf,
-copylock, structtag, …; see `settings.VetAnalyzerNames`). Output:
+copylock, structtag, …; see `settings.VetAnalyzerNames`).
+
+`--severity=LEVEL` (also on `vet`) drops anything less severe than
+LEVEL. Values: `error`, `warning`, `info`, `hint`. `--severity=warning`
+keeps errors and warnings.
+
+Output:
 
 ```
 /path/session.go:39:6: error [compiler]: undefined: Context
@@ -115,6 +130,7 @@ print-to-stdout:
 - `-w` — write edited content back to the file in place
 - `-d` — emit a unified diff
 - `-l` — print the paths of files that would change
+- `--preserve` — with `-w`, copy the original to `<file>.orig` first
 
 Example — format a file in place and show what changed:
 
@@ -179,18 +195,30 @@ NewSession creates a new gopls session with the given cache.
 
 Use `-json` for programmatic consumption. Fields are stable.
 
-## Rename preview
+## Rename
 
-Rename returns a preview of the edits it would make — it does NOT modify
-files. Review the output, then apply the changes yourself (or with a
-separate tool).
+By default `rename` prints the new content of each changed file to
+stdout. The same edit-mode flags as `format`/`imports` apply:
+
+- `-w` — write changes in place
+- `-d` — emit a unified diff
+- `-l` — print the paths of files that would change
+- `--preserve` — with `-w`, copy each original to `<file>.orig` first
+- `--dry-run` — print a terse per-file summary of would-be edits and
+  exit without modifying anything
 
 ```sh
-gopls -remote=auto cli rename NewSession --in session.go --to CreateSession
-# Output (text): per file, "PATH:" followed by indented
-#   L:C-L:C → "newText"   lines, one per edit.
-# Output (-json): raw protocol.WorkspaceEdit (documentChanges populated).
+# Preview — terse summary, no files touched:
+gopls -remote=auto cli rename NewSession --in session.go --to CreateSession --dry-run
+
+# Apply — write in place:
+gopls -remote=auto cli rename NewSession --in session.go --to CreateSession -w
 ```
+
+`--dry-run` output (text): per file, `PATH:` followed by indented
+`L:C-L:C → "newText"` lines, one per edit.
+`-json` output: the raw `protocol.WorkspaceEdit` (`documentChanges`
+populated), regardless of `--dry-run`.
 
 ## When NOT to use
 
