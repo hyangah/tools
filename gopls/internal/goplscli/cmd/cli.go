@@ -39,9 +39,9 @@ func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []st
 
 	sub, subArgs := args[0], args[1:]
 
-	// Edit-producing subcommands (format, imports, fix) handle their own
-	// output because the edit-mode flags (-w/-d/-l) control side effects
-	// and per-file rendering that don't fit the result→printer pipeline.
+	// Edit-producing subcommands (format, imports, fix, rename) handle their
+	// own output because the edit-mode flags (-w/-d/-l/--dry-run) control side
+	// effects and per-file rendering that don't fit the result→printer pipeline.
 	switch sub {
 	case "format":
 		code, err := runFormat(ctx, server, jsonOutput, subArgs, w)
@@ -67,6 +67,12 @@ func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []st
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		}
 		return code
+	case "rename":
+		code, err := runRename(ctx, server, jsonOutput, subArgs, w)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		}
+		return code
 	}
 
 	var result any
@@ -85,8 +91,6 @@ func Run(ctx context.Context, server protocol.Server, jsonOutput bool, args []st
 		result, err = runSymbols(ctx, server, subArgs)
 	case "wsymbols":
 		result, err = runWSymbols(ctx, server, subArgs)
-	case "rename":
-		result, err = runRename(ctx, server, subArgs)
 	case "check":
 		result, err = runCheck(ctx, server, subArgs)
 	case "vet":
@@ -279,33 +283,6 @@ func runWSymbols(ctx context.Context, server protocol.Server, args []string) ([]
 	})
 }
 
-// runRename runs textDocument/rename.
-func runRename(ctx context.Context, server protocol.Server, args []string) (*protocol.WorkspaceEdit, error) {
-	// Parse: FILE:LINE:COL --to NEWNAME  or  SYMBOL --in FILE --to NEWNAME
-	var newName string
-	var posArgs []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--to" && i+1 < len(args) {
-			newName = args[i+1]
-			i++
-		} else {
-			posArgs = append(posArgs, args[i])
-		}
-	}
-	if newName == "" {
-		return nil, fmt.Errorf("usage: gopls cli rename FILE:LINE:COL --to NEWNAME")
-	}
-
-	tdpp, err := resolvePosition(ctx, server, posArgs)
-	if err != nil {
-		return nil, err
-	}
-	return server.Rename(ctx, &protocol.RenameParams{
-		TextDocumentPositionParams: tdpp,
-		NewName:                    newName,
-	})
-}
-
 // printText prints the result in human-readable text format.
 func printText(w io.Writer, sub string, result any) {
 	switch sub {
@@ -328,39 +305,8 @@ func printText(w io.Writer, sub string, result any) {
 			loc := goplscli.LocationToCLI(s.Location)
 			fmt.Fprintf(w, "%s\t%s\t%s:%d:%d\n", s.Name, s.Kind, loc.File, loc.Start.Line, loc.Start.Column)
 		}
-	case "rename":
-		edit := result.(*protocol.WorkspaceEdit)
-		printRenameEdit(w, edit)
 	case "check", "vet":
 		printDiagnostics(w, result.([]cliDiagnostic))
-	}
-}
-
-// printRenameEdit prints a WorkspaceEdit returned by textDocument/rename.
-// gopls always populates DocumentChanges (the modern field), regardless of
-// client capability — so we read from there rather than the legacy Changes map.
-func printRenameEdit(w io.Writer, edit *protocol.WorkspaceEdit) {
-	for _, c := range edit.DocumentChanges {
-		if c.TextDocumentEdit == nil {
-			continue
-		}
-		uri := c.TextDocumentEdit.TextDocument.URI
-		fmt.Fprintf(w, "%s:\n", uri.Path())
-		for _, e := range protocol.AsTextEdits(c.TextDocumentEdit.Edits) {
-			fmt.Fprintf(w, "  %d:%d-%d:%d → %q\n",
-				e.Range.Start.Line+1, e.Range.Start.Character+1,
-				e.Range.End.Line+1, e.Range.End.Character+1,
-				e.NewText)
-		}
-	}
-	for uri, edits := range edit.Changes {
-		fmt.Fprintf(w, "%s:\n", uri.Path())
-		for _, e := range edits {
-			fmt.Fprintf(w, "  %d:%d-%d:%d → %q\n",
-				e.Range.Start.Line+1, e.Range.Start.Character+1,
-				e.Range.End.Line+1, e.Range.End.Character+1,
-				e.NewText)
-		}
 	}
 }
 

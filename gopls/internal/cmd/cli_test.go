@@ -305,14 +305,8 @@ func WSymbolsTestFn() {}
 	}
 }
 
-// TestCLIRename tests `gopls cli rename`.
-//
-// The remote variant is the regression test for the bug where the printer
-// iterated WorkspaceEdit.Changes (always empty under gopls) instead of
-// DocumentChanges, producing empty stdout.
-func TestCLIRename(t *testing.T) {
-	t.Parallel()
-	tree := writeTree(t, `
+// renameSource is the txtar archive for TestCLIRename* tests.
+const renameSource = `
 -- go.mod --
 module example.com
 go 1.18
@@ -325,7 +319,126 @@ func oldname() {}
 func caller() {
 	oldname()
 }
-`)
+`
+
+// TestCLIRenameDryRun tests `gopls cli rename --dry-run`, which prints a terse
+// summary of what would change without modifying any files.
+//
+// This also serves as the regression test for the bug where the printer
+// iterated WorkspaceEdit.Changes (always empty under gopls) instead of
+// DocumentChanges, producing empty stdout.
+func TestCLIRenameDryRun(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, renameSource)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "rename", "--dry-run", "oldname", "--in", "a.go", "--to", "newname")
+			res.checkExit(true)
+			if res.stdout == "" {
+				t.Fatalf("rename --dry-run produced empty stdout in mode %s; stderr=%s",
+					mode.name, res.stderr)
+			}
+			// Expect both edit sites: the declaration and the caller.
+			res.checkStdout(`a\.go`)
+			res.checkStdout(`"newname"`)
+			// Dry-run must not write to disk: a.go must still contain "oldname".
+			content, err := os.ReadFile(filepath.Join(tree, "a.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(content, []byte("oldname")) {
+				t.Errorf("--dry-run modified a.go on disk; content=%q", content)
+			}
+		})
+	}
+}
+
+// TestCLIRenameWrite tests `gopls cli rename -w`, which overwrites files
+// in place with the renamed content.
+func TestCLIRenameWrite(t *testing.T) {
+	t.Parallel()
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			// Give each mode its own tree so -w does not corrupt siblings.
+			tree := writeTree(t, renameSource)
+			res := runCLI(t, tree, mode, "rename", "-w", "oldname", "--in", "a.go", "--to", "newname")
+			res.checkExit(true)
+			content, err := os.ReadFile(filepath.Join(tree, "a.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(content, []byte("newname")) {
+				t.Errorf("-w did not write newname to a.go; content=%q", content)
+			}
+			if bytes.Contains(content, []byte("oldname")) {
+				t.Errorf("-w left oldname in a.go; content=%q", content)
+			}
+		})
+	}
+}
+
+// TestCLIRenameDiff tests `gopls cli rename -d`, which prints a unified diff
+// of the changes without modifying any files.
+func TestCLIRenameDiff(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, renameSource)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "rename", "-d", "oldname", "--in", "a.go", "--to", "newname")
+			res.checkExit(true)
+			if res.stdout == "" {
+				t.Fatalf("rename -d produced empty stdout in mode %s; stderr=%s",
+					mode.name, res.stderr)
+			}
+			// Unified diff must contain standard diff markers.
+			res.checkStdout(`---`)
+			res.checkStdout(`\+\+\+`)
+			res.checkStdout(`@@`)
+			res.checkStdout(`newname`)
+			// Must not modify disk.
+			content, err := os.ReadFile(filepath.Join(tree, "a.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(content, []byte("oldname")) {
+				t.Errorf("-d modified a.go on disk; content=%q", content)
+			}
+		})
+	}
+}
+
+// TestCLIRenameList tests `gopls cli rename -l`, which prints the names of
+// files that would change without modifying any files.
+func TestCLIRenameList(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, renameSource)
+	for _, mode := range cliModes(t) {
+		t.Run(mode.name, func(t *testing.T) {
+			res := runCLI(t, tree, mode, "rename", "-l", "oldname", "--in", "a.go", "--to", "newname")
+			res.checkExit(true)
+			if res.stdout == "" {
+				t.Fatalf("rename -l produced empty stdout in mode %s; stderr=%s",
+					mode.name, res.stderr)
+			}
+			// -l prints file names only.
+			res.checkStdout(`a\.go`)
+			// Must not modify disk.
+			content, err := os.ReadFile(filepath.Join(tree, "a.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(content, []byte("oldname")) {
+				t.Errorf("-l modified a.go on disk; content=%q", content)
+			}
+		})
+	}
+}
+
+// TestCLIRenameDefault tests `gopls cli rename` with no edit flags, which
+// prints the full new content of each changed file to stdout.
+func TestCLIRenameDefault(t *testing.T) {
+	t.Parallel()
+	tree := writeTree(t, renameSource)
 	for _, mode := range cliModes(t) {
 		t.Run(mode.name, func(t *testing.T) {
 			res := runCLI(t, tree, mode, "rename", "oldname", "--in", "a.go", "--to", "newname")
@@ -334,9 +447,16 @@ func caller() {
 				t.Fatalf("rename produced empty stdout in mode %s; stderr=%s",
 					mode.name, res.stderr)
 			}
-			// Expect both edit sites: the declaration and the caller.
-			res.checkStdout(`a\.go`)
-			res.checkStdout(`"newname"`)
+			// Default output is the full new file content; it must contain newname.
+			res.checkStdout(`newname`)
+			// Must not modify disk.
+			content, err := os.ReadFile(filepath.Join(tree, "a.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(content, []byte("oldname")) {
+				t.Errorf("no-flag rename modified a.go on disk; content=%q", content)
+			}
 		})
 	}
 }
