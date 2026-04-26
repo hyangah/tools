@@ -770,7 +770,6 @@ func F3[K comparable, V any](map[K]V, chan V) {}
 }
 
 func TestPackageMemberCompletionAfterSyntaxError(t *testing.T) {
-	// This test documents the current broken behavior due to golang/go#58833.
 	const src = `
 -- go.mod --
 module mod.com
@@ -792,18 +791,20 @@ func main() {
 		env.Await(env.DoneWithOpen())
 		loc := env.RegexpSearch("main.go", "Ldex()")
 		completions := env.Completion(loc)
-		if len(completions.Items) == 0 {
-			t.Fatalf("no completion items")
+		var found *protocol.CompletionItem
+		for _, item := range completions.Items {
+			if item.Label == "Ldexp" {
+				found = &item
+				break
+			}
 		}
-		env.AcceptCompletion(loc, completions.Items[0])
+		if found == nil {
+			t.Fatalf("no completion item labeled Ldexp")
+		}
+		env.AcceptCompletion(loc, *found)
 		env.Await(env.DoneWithChange())
 		got := env.BufferText("main.go")
-		// The completion of math.Ldex after the syntax error on the
-		// previous line is not "math.Ldexp" but "math.Ldexmath.Abs".
-		// (In VSCode, "Abs" wrongly appears in the completion menu.)
-		// This is a consequence of poor error recovery in the parser
-		// causing "math.Ldex" to become a BadExpr.
-		want := "package main\n\nimport \"math\"\n\nfunc main() {\n\tmath.Sqrt(,0)\n\tmath.Ldexmath.Abs(${1:})\n}\n"
+		want := "package main\n\nimport \"math\"\n\nfunc main() {\n\tmath.Sqrt(,0)\n\tmath.Ldexp(${1:})\n}\n"
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("unimported completion (-want +got):\n%s", diff)
 		}
