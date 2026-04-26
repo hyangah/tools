@@ -839,6 +839,11 @@ func (c *completer) containingIdent(src []byte) *ast.Ident {
 
 	pos, tkn, lit := c.scanToken(src)
 	if !pos.IsValid() {
+		// No token at cursor — still check for an IDENT. pattern
+		// (cursor immediately after a dot with no RHS typed yet).
+		if ok, lhs := c.inferSelector(src); ok {
+			c.inferredSelectorLHS = lhs
+		}
 		return nil
 	}
 
